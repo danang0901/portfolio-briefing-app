@@ -186,11 +186,11 @@ export async function POST(req: Request) {
     try {
       const count = await kv.incr(rateLimitKey);
       if (count === 1) await kv.expire(rateLimitKey, 25 * 60 * 60);
-      if (count > 3) {
+      if (count > 1) {
         return new Response(
           JSON.stringify({
             type: 'error',
-            message: 'Daily regeneration limit reached (3/day). Your briefing refreshes automatically each morning.',
+            message: 'Daily limit reached (1/day). Your briefing refreshes automatically each morning.',
           }) + '\n',
           { status: 429, headers: { 'Content-Type': 'application/x-ndjson' } },
         );
@@ -236,7 +236,7 @@ export async function POST(req: Request) {
           newsSourced = false;
         }
 
-        // ── Phase 2: Synthesis with Sonnet ────────────────────────────────────
+        // ── Phase 2: Streaming synthesis with Sonnet ──────────────────────────
         emit({ type: 'progress', message: 'Generating signals…' });
 
         const holdingsText = holdings
@@ -269,21 +269,83 @@ Context:
 Return ONLY valid JSON (no markdown, no code fences) matching this exact structure:
 ${OUTPUT_SCHEMA}`;
 
-        const synthesis = await client.messages.create({
+        // Incremental JSON parser — emit each stock card as Sonnet generates it
+        let parseState: 'before_stocks' | 'in_stocks' | 'after_stocks' = 'before_stocks';
+        let accumulated = '';
+        let inStr = false;
+        let esc = false;
+        let depth = 0;
+        let objectStart = -1;
+        const emittedTickers = new Set<string>();
+
+        const synthStream = client.messages.stream({
           model: 'claude-sonnet-4-6',
           max_tokens: 4096,
           messages: [{ role: 'user', content: synthesisPrompt }],
         });
 
-        const raw = synthesis.content[0].type === 'text' ? synthesis.content[0].text : '{}';
+        for await (const chunk of synthStream) {
+          if (chunk.type !== 'content_block_delta' || chunk.delta.type !== 'text_delta') continue;
+
+          for (const ch of chunk.delta.text) {
+            accumulated += ch;
+
+            // String escape tracking
+            if (esc) { esc = false; continue; }
+            if (ch === '\\' && inStr) { esc = true; continue; }
+            if (ch === '"') { inStr = !inStr; continue; }
+            if (inStr) continue;
+
+            if (parseState === 'before_stocks') {
+              // Wait for `"stocks": [`
+              if (ch === '[') {
+                const tail = accumulated.slice(-40);
+                if (/"stocks"\s*:\s*\[$/.test(tail)) {
+                  parseState = 'in_stocks';
+                  depth = 0;
+                  objectStart = -1;
+                }
+              }
+            } else if (parseState === 'in_stocks') {
+              if (ch === '{') {
+                if (depth === 0) objectStart = accumulated.length - 1;
+                depth++;
+              } else if (ch === '}') {
+                depth--;
+                if (depth === 0 && objectStart !== -1) {
+                  const objStr = accumulated.slice(objectStart);
+                  try {
+                    const stock = JSON.parse(objStr) as StockSignal;
+                    if (stock.ticker && !emittedTickers.has(stock.ticker)) {
+                      emit({ type: 'stock', data: stock });
+                      emittedTickers.add(stock.ticker);
+                    }
+                  } catch {
+                    // Partial object — will be caught by finalMessage fallback
+                  }
+                  objectStart = -1;
+                }
+              } else if (ch === ']' && depth === 0) {
+                parseState = 'after_stocks';
+              }
+            }
+          }
+        }
+
+        // Fallback: parse full response for any missed stocks + overview
+        const finalMsg = await synthStream.finalMessage();
+        const raw = finalMsg.content[0].type === 'text' ? finalMsg.content[0].text : '{}';
         const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
         const result = JSON.parse(cleaned) as { stocks: StockSignal[]; overview: BriefingOverview };
 
-        const generatedAt = new Date().toISOString();
-
+        // Emit any stocks missed by the incremental parser
         for (const stock of result.stocks) {
-          emit({ type: 'stock', data: stock });
+          if (!emittedTickers.has(stock.ticker)) {
+            emit({ type: 'stock', data: stock });
+          }
         }
+
+        const generatedAt = new Date().toISOString();
         emit({ type: 'overview', data: result.overview });
         emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced });
 
