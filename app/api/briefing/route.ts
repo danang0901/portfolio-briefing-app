@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 const client = new Anthropic();
@@ -20,19 +20,29 @@ export type StockSignal = {
   risk_change: 'increased' | 'decreased' | 'unchanged';
 };
 
+export type BriefingOverview = {
+  watch_list: string[];
+  priority_actions: string[];
+  sector_breakdown: string;
+  region_exposure: string;
+  risk_profile: string;
+  macro_note: string;
+};
+
 export type BriefingData = {
   stocks: StockSignal[];
-  overview: {
-    watch_list: string[];
-    priority_actions: string[];
-    sector_breakdown: string;
-    region_exposure: string;
-    risk_profile: string;
-    macro_note: string;
-  };
+  overview: BriefingOverview;
   generated_at: string;
   news_sourced: boolean;
 };
+
+// Streaming event types sent to the client
+type StreamEvent =
+  | { type: 'progress'; message: string }
+  | { type: 'stock'; data: StockSignal }
+  | { type: 'overview'; data: BriefingOverview }
+  | { type: 'done'; generated_at: string; news_sourced: boolean }
+  | { type: 'error'; message: string };
 
 const OUTPUT_SCHEMA = `{
   "stocks": [
@@ -50,15 +60,8 @@ const OUTPUT_SCHEMA = `{
     }
   ],
   "overview": {
-    "watch_list": [
-      "3-5 specific items the trader should pay attention to this week",
-      "Include dates where known (e.g. 'RBA decision 1 Apr')",
-      "Prioritise by potential portfolio impact"
-    ],
-    "priority_actions": [
-      "One line per ADD/TRIM/EXIT signal only — empty array if all HOLD",
-      "Format: 'TRIM WOW — reason'"
-    ],
+    "watch_list": ["3-5 specific items the trader should pay attention to this week"],
+    "priority_actions": ["One line per ADD/TRIM/EXIT signal only — empty array if all HOLD"],
     "sector_breakdown": "1-2 sentences on sector concentration and any imbalances",
     "region_exposure": "1-2 sentences on geographic exposure",
     "risk_profile": "1-2 sentences on overall portfolio risk and diversification quality",
@@ -66,10 +69,35 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
-async function gatherNewsContext(holdings: Holding[], today: string): Promise<string> {
-  const tickers = holdings.map(h => h.ticker).join(', ');
+export async function POST(req: Request) {
+  const body = await req.json();
+  const holdings = (body.portfolio ?? []) as Holding[];
 
-  const prompt = `Today is ${today}. You are researching an ASX portfolio for a morning briefing.
+  if (!holdings.length) {
+    return new Response(
+      JSON.stringify({ type: 'error', message: 'Portfolio is empty.' }) + '\n',
+      { status: 400, headers: { 'Content-Type': 'application/x-ndjson' } },
+    );
+  }
+
+  const today = new Date().toLocaleDateString('en-AU', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      function emit(event: StreamEvent) {
+        controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
+      }
+
+      try {
+        // ── Phase 1: Search ──────────────────────────────────────────────────
+        emit({ type: 'progress', message: 'Starting news search…' });
+
+        const tickers = holdings.map(h => h.ticker).join(', ');
+        const searchPrompt = `Today is ${today}. You are researching an ASX portfolio for a morning briefing.
 
 Portfolio tickers: ${tickers}
 
@@ -83,75 +111,82 @@ For index ETFs (VGS = global equities, VAS = ASX 300, VAE = Asian equities): sea
 
 Summarise what you find. Be specific — include dates, figures, and source context where available. Note explicitly where you couldn't find recent information.`;
 
-  try {
-    // Use web_search tool to gather live news context.
-    // The SDK types don't yet include web_search_20250305, so we cast via unknown.
-    type AnyMessage = {
-      stop_reason: string;
-      content: Array<{ type: string; text?: string; tool_use_id?: string }>;
-    };
+        let newsContext = '';
+        let newsSourced = false;
 
-    const betaCreate = client.beta.messages.create.bind(client.beta.messages) as (
-      params: unknown
-    ) => Promise<AnyMessage>;
+        try {
+          type AnyMessage = {
+            stop_reason: string;
+            content: Array<{ type: string; text?: string; tool_use_id?: string }>;
+          };
 
-    const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }];
+          const betaCreate = client.beta.messages.create.bind(client.beta.messages) as (
+            params: unknown
+          ) => Promise<AnyMessage>;
 
-    for (let i = 0; i < 25; i++) {
-      const response = await betaCreate({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages,
-        betas: ['web-search-2025-03-05'],
-      });
+          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: searchPrompt }];
 
-      if (response.stop_reason === 'end_turn') {
-        return response.content
-          .filter(b => b.type === 'text')
-          .map(b => b.text ?? '')
-          .join('\n');
-      }
+          // Emit per-ticker progress as we go
+          let searchRound = 0;
+          for (let i = 0; i < 25; i++) {
+            if (searchRound < holdings.length) {
+              emit({ type: 'progress', message: `Searching news for ${holdings[searchRound]?.ticker ?? '…'}…` });
+              searchRound++;
+            }
 
-      if (response.stop_reason === 'tool_use') {
-        messages.push({ role: 'assistant', content: response.content as Anthropic.ContentBlock[] });
-        const toolResults = response.content
-          .filter(b => b.type === 'tool_result' && b.tool_use_id)
-          .map(b => ({
-            type: 'tool_result' as const,
-            tool_use_id: b.tool_use_id!,
-            content: JSON.stringify(b),
-          }));
-        if (toolResults.length > 0) {
-          messages.push({ role: 'user', content: toolResults });
-        } else {
-          break;
+            const response = await betaCreate({
+              model: 'claude-sonnet-4-6',
+              max_tokens: 4096,
+              tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+              messages,
+              betas: ['web-search-2025-03-05'],
+            });
+
+            if (response.stop_reason === 'end_turn') {
+              newsContext = response.content
+                .filter(b => b.type === 'text')
+                .map(b => b.text ?? '')
+                .join('\n');
+              newsSourced = newsContext.length > 0;
+              break;
+            }
+
+            if (response.stop_reason === 'tool_use') {
+              messages.push({ role: 'assistant', content: response.content as Anthropic.ContentBlock[] });
+              const toolResults = response.content
+                .filter(b => b.type === 'tool_result' && b.tool_use_id)
+                .map(b => ({
+                  type: 'tool_result' as const,
+                  tool_use_id: b.tool_use_id!,
+                  content: JSON.stringify(b),
+                }));
+              if (toolResults.length > 0) {
+                messages.push({ role: 'user', content: toolResults });
+              } else {
+                break;
+              }
+            } else {
+              break;
+            }
+          }
+        } catch {
+          // Web search unavailable — synthesis will note this
+          newsContext = '';
+          newsSourced = false;
         }
-      } else {
-        break;
-      }
-    }
-  } catch {
-    // Web search unavailable — synthesis will note this
-  }
 
-  return '';
-}
+        // ── Phase 2: Synthesis ───────────────────────────────────────────────
+        emit({ type: 'progress', message: 'Generating signals…' });
 
-async function synthesizeBriefing(
-  holdings: Holding[],
-  newsContext: string,
-  today: string,
-): Promise<BriefingData> {
-  const holdingsText = holdings
-    .map(h => `  ${h.ticker}: ${h.units.toLocaleString()} units`)
-    .join('\n');
+        const holdingsText = holdings
+          .map(h => `  ${h.ticker}: ${h.units.toLocaleString()} units`)
+          .join('\n');
 
-  const contextSection = newsContext
-    ? `\nRecent news and context (sourced via web search):\n${newsContext}\n`
-    : '\nNote: Live news unavailable. Base analysis on training data knowledge and note any limitations.\n';
+        const contextSection = newsContext
+          ? `\nRecent news and context (sourced via web search):\n${newsContext}\n`
+          : '\nNote: Live news unavailable. Base analysis on training data knowledge and note any limitations.\n';
 
-  const prompt = `You are a senior ASX equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
+        const synthesisPrompt = `You are a senior ASX equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
 
 Portfolio:
 ${holdingsText}
@@ -162,61 +197,46 @@ Signal definitions:
 - TRIM: Reduce — thesis weakening, position oversized, or risk has increased meaningfully
 - EXIT: Close — thesis is broken or the investment case has fundamentally changed
 
-Confidence:
-- High: Strong evidence supports the signal
-- Medium: Reasonable evidence, some uncertainty
-- Low: Limited evidence, judgement call
-
-Thesis status:
-- intact: Original reason for holding is still valid
-- developing: Thesis is evolving — watch closely, could go either way
-- broken: Investment case has materially changed
+Confidence: High = strong evidence, Medium = reasonable evidence, Low = limited evidence.
+Thesis status: intact = original reason still valid, developing = evolving closely, broken = case has changed.
 
 Context:
-- This is a long-term hold portfolio. Most signals should be HOLD unless there is a genuine reason to act.
-- For ASX miners: China demand (iron ore, copper) is the key variable. Factor in China PMI.
+- Long-term hold portfolio. Most signals should be HOLD unless there is a genuine reason to act.
+- For ASX miners: China demand (iron ore, copper) is the key variable.
 - For ETFs (VGS, VAS, VAE): evaluate on index trajectory and macro tailwinds/headwinds.
-- Be direct. If information is limited, say so in the catalyst field rather than fabricating detail.
+- Be direct. If information is limited, say so in the catalyst field.
 
 Return ONLY valid JSON (no markdown, no code fences) matching this exact structure:
 ${OUTPUT_SCHEMA}`;
 
-  const message = await client.messages.create({
-    model: 'claude-opus-4-6',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
+        const synthesis = await client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 4096,
+          messages: [{ role: 'user', content: synthesisPrompt }],
+        });
+
+        const raw = synthesis.content[0].type === 'text' ? synthesis.content[0].text : '{}';
+        const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+        const result = JSON.parse(cleaned) as { stocks: StockSignal[]; overview: BriefingOverview };
+
+        // Emit each stock card individually so the frontend can render progressively
+        for (const stock of result.stocks) {
+          emit({ type: 'stock', data: stock });
+        }
+
+        emit({ type: 'overview', data: result.overview });
+        emit({ type: 'done', generated_at: new Date().toISOString(), news_sourced: newsSourced });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Briefing stream error:', message);
+        emit({ type: 'error', message });
+      } finally {
+        controller.close();
+      }
+    },
   });
 
-  const raw = message.content[0].type === 'text' ? message.content[0].text : '{}';
-  const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-  const result = JSON.parse(cleaned);
-
-  return {
-    ...result,
-    generated_at: new Date().toISOString(),
-    news_sourced: newsContext.length > 0,
-  };
-}
-
-export async function POST(req: Request) {
-  const body = await req.json();
-  const holdings = (body.portfolio ?? []) as Holding[];
-
-  if (!holdings.length) {
-    return NextResponse.json({ error: 'Portfolio is empty.' }, { status: 400 });
-  }
-
-  const today = new Date().toLocaleDateString('en-AU', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson' },
   });
-
-  try {
-    const newsContext = await gatherNewsContext(holdings, today);
-    const briefing = await synthesizeBriefing(holdings, newsContext, today);
-    return NextResponse.json({ briefing });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('Briefing API error:', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
 }

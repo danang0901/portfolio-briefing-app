@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
-import type { BriefingData, StockSignal } from '@/app/api/briefing/route';
+import type { BriefingData, BriefingOverview, StockSignal } from '@/app/api/briefing/route';
 
 type Holding = { ticker: string; units: number };
 type HistoryEntry = { time: string; description: string };
@@ -220,9 +220,11 @@ export default function Home() {
   const [tab, setTab]                   = useState<'briefing' | 'portfolio'>('briefing');
   const [portfolio, setPortfolio]       = useState<Holding[]>(DEFAULT_PORTFOLIO);
   const [history, setHistory]           = useState<HistoryEntry[]>([]);
-  const [briefingData, setBriefingData] = useState<BriefingData | null>(null);
-  const [briefingLoading, setBriefingLoading] = useState(false);
-  const [briefingError, setBriefingError]     = useState('');
+  const [briefingData, setBriefingData]         = useState<BriefingData | null>(null);
+  const [briefingLoading, setBriefingLoading]   = useState(false);
+  const [briefingError, setBriefingError]       = useState('');
+  const [progressMessage, setProgressMessage]   = useState('');
+  const [streamingStocks, setStreamingStocks]   = useState<StockSignal[]>([]);
   const [prices, setPrices]             = useState<PriceMap>({});
   const [nlInput, setNlInput]           = useState('');
   const [nlLoading, setNlLoading]       = useState(false);
@@ -348,24 +350,90 @@ export default function Home() {
   async function signOut() {
     await supabase.auth.signOut();
     setUser(null);
+    setPortfolio(DEFAULT_PORTFOLIO);
+    setBriefingData(null);
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(BRIEFING_KEY);
   }
 
-  // ── Generate briefing ──────────────────────────────────────────────────────
+  // ── Generate briefing (streaming) ─────────────────────────────────────────
   async function generateBriefing() {
     setBriefingLoading(true);
     setBriefingError('');
+    setProgressMessage('');
+    setStreamingStocks([]);
+
+    const accumulatedStocks: StockSignal[] = [];
+    let accumulatedOverview: BriefingOverview | null = null;
+    let generatedAt = '';
+    let newsSourced = false;
+
     try {
       const res = await fetch('/api/briefing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ portfolio }),
       });
-      if (!res.ok) throw new Error('API error');
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (!res.ok || !res.body) throw new Error('API error');
 
-      const briefing = data.briefing as BriefingData;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? ''; // keep incomplete last line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as
+              | { type: 'progress'; message: string }
+              | { type: 'stock'; data: StockSignal }
+              | { type: 'overview'; data: BriefingOverview }
+              | { type: 'done'; generated_at: string; news_sourced: boolean }
+              | { type: 'error'; message: string };
+
+            if (event.type === 'progress') {
+              setProgressMessage(event.message);
+            } else if (event.type === 'stock') {
+              accumulatedStocks.push(event.data);
+              setStreamingStocks([...accumulatedStocks]);
+            } else if (event.type === 'overview') {
+              accumulatedOverview = event.data;
+            } else if (event.type === 'done') {
+              generatedAt = event.generated_at;
+              newsSourced = event.news_sourced;
+            } else if (event.type === 'error') {
+              throw new Error(event.message);
+            }
+          } catch (parseErr) {
+            // Skip malformed lines
+            if (parseErr instanceof SyntaxError) continue;
+            throw parseErr;
+          }
+        }
+      }
+
+      if (!accumulatedStocks.length || !accumulatedOverview) {
+        throw new Error('Incomplete briefing received.');
+      }
+
+      const briefing: BriefingData = {
+        stocks: accumulatedStocks,
+        overview: accumulatedOverview,
+        generated_at: generatedAt || new Date().toISOString(),
+        news_sourced: newsSourced,
+      };
+
       setBriefingData(briefing);
+      setStreamingStocks([]);
+      setProgressMessage('');
       saveCachedBriefing(briefing);
 
       // Store in Supabase if signed in
@@ -381,6 +449,8 @@ export default function Home() {
       setBriefingError(
         err instanceof Error ? err.message : 'Failed to generate briefing.',
       );
+      setStreamingStocks([]);
+      setProgressMessage('');
     } finally {
       setBriefingLoading(false);
     }
@@ -506,7 +576,7 @@ export default function Home() {
             <button
               onClick={generateBriefing}
               disabled={briefingLoading}
-              className="w-full py-3 rounded-xl text-sm font-semibold mb-4 transition-all"
+              className="w-full py-3 rounded-xl text-sm font-semibold mb-2 transition-all"
               style={{
                 background: briefingLoading ? 'var(--border)' : 'var(--accent)',
                 color: briefingLoading ? 'var(--text-muted)' : '#fff',
@@ -518,10 +588,22 @@ export default function Home() {
                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3"/>
                     <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
                   </svg>
-                  Gathering news &amp; generating briefing…
+                  {progressMessage || 'Starting…'}
                 </span>
               ) : briefingData ? 'Regenerate Briefing' : 'Generate Briefing'}
             </button>
+
+            {/* Streaming stock cards — visible during generation */}
+            {briefingLoading && streamingStocks.length > 0 && (
+              <div className="mb-2 animate-fade-in">
+                {streamingStocks.map(stock => (
+                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} />
+                ))}
+                <p className="text-xs text-center py-2" style={{ color: 'var(--text-muted)' }}>
+                  Loading remaining holdings…
+                </p>
+              </div>
+            )}
 
             {briefingError && (
               <p className="text-sm mb-4 px-4 py-3 rounded-lg"
@@ -530,7 +612,8 @@ export default function Home() {
               </p>
             )}
 
-            {briefingData ? (
+            {/* Completed briefing */}
+            {!briefingLoading && briefingData ? (
               <div className="animate-fade-in">
 
                 {/* Briefing meta */}
