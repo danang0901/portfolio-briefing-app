@@ -234,6 +234,7 @@ export default function Home() {
   const [nlLoading, setNlLoading]       = useState(false);
   const [nlError, setNlError]           = useState('');
   const [user, setUser]                 = useState<User | null>(null);
+  const [accessToken, setAccessToken]   = useState('');
   const [authLoading, setAuthLoading]   = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -262,6 +263,7 @@ export default function Home() {
       async (_event, session) => {
         const currentUser = session?.user ?? null;
         setUser(currentUser);
+        setAccessToken(session?.access_token ?? '');
         setAuthLoading(false);
 
         if (!currentUser) return;
@@ -354,6 +356,7 @@ export default function Home() {
   async function signOut() {
     await supabase.auth.signOut();
     setUser(null);
+    setAccessToken('');
     setPortfolio(DEFAULT_PORTFOLIO);
     setBriefingData(null);
     localStorage.removeItem(STORAGE_KEY);
@@ -374,14 +377,13 @@ export default function Home() {
     let fromCache = false;
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/briefing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           portfolio,
           userId: user?.id ?? '',
-          accessToken: session?.access_token ?? '',
+          accessToken,
         }),
       });
       if (!res.ok) {
