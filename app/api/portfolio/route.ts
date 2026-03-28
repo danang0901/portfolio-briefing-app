@@ -24,9 +24,11 @@ User command: "${command}"
 Rules:
 - Tickers must be UPPERCASE
 - Units must be positive integers
-- "Add X TICKER" → increase units or create new holding
+- "Add TICKER" (no quantity) → add or create holding with 1 unit
+- "Add X TICKER" → increase units by X or create new holding with X units
 - "Remove TICKER" or "Delete TICKER" → remove that holding
 - "Set TICKER to X" / "TICKER = X" → set units to X
+- If no quantity is mentioned when adding, default to 1 unit
 - If ambiguous or invalid, return an error
 
 Respond with ONLY valid JSON:
