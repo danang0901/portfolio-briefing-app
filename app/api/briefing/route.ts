@@ -1,9 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { createHash } from 'crypto';
+import { kv } from '@vercel/kv';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 const client = new Anthropic();
+const isKvConfigured = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
 
 type Holding = { ticker: string; units: number };
 
@@ -69,9 +72,79 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
+// 8-char hex SHA-256 of sorted holdings — used in cache key
+function portfolioHash(holdings: Holding[]): string {
+  const sorted = [...holdings].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 8);
+}
+
+// Today's date in AEST as YYYY-MM-DD (en-CA locale returns ISO-style date)
+function todayAEST(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+}
+
+type AnyMessage = {
+  stop_reason: string;
+  content: Array<{ type: string; text?: string; tool_use_id?: string }>;
+};
+
+// Search news for a single ticker using Haiku (web_search beta, max 4 iterations)
+async function searchTicker(ticker: string, today: string): Promise<string> {
+  const prompt = `Search for recent ASX news for ${ticker}. Today is ${today}.
+Include ALL of the following:
+1. Price-moving events in the past 3 weeks (announcements, results, guidance changes) — include dates and figures
+2. Upcoming catalysts in the next 2 months (earnings, AGM, capital events, macro data releases)
+3. Recent analyst actions (upgrades, downgrades, price target changes)
+For index ETFs (VGS, VAS, VAE): focus on index drivers and macro tailwinds/headwinds instead of #3.
+Be specific — if you can't find recent information, say so explicitly.`;
+
+  const betaCreate = client.beta.messages.create.bind(client.beta.messages) as (
+    params: unknown
+  ) => Promise<AnyMessage>;
+
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }];
+
+  for (let i = 0; i < 4; i++) {
+    const response = await betaCreate({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages,
+      betas: ['web-search-2025-03-05'],
+    });
+
+    const text = response.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text ?? '')
+      .join('\n');
+
+    if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
+      return text;
+    }
+
+    if (response.stop_reason === 'tool_use') {
+      // Push assistant response; server handles web search tool execution automatically.
+      // If no client-side tool_use blocks exist, the text so far is the result.
+      messages.push({ role: 'assistant', content: response.content as Anthropic.ContentBlock[] });
+      const hasClientTools = response.content.some(b => b.type === 'tool_use');
+      if (!hasClientTools) {
+        return text;
+      }
+    } else {
+      return text;
+    }
+  }
+
+  return '';
+}
+
 export async function POST(req: Request) {
   const body = await req.json();
   const holdings = (body.portfolio ?? []) as Holding[];
+  const userId = (body.userId ?? '') as string;
+  const isCron =
+    !!process.env.CRON_SECRET &&
+    req.headers.get('Authorization') === `Bearer ${process.env.CRON_SECRET}`;
 
   if (!holdings.length) {
     return new Response(
@@ -82,8 +155,61 @@ export async function POST(req: Request) {
 
   const today = new Date().toLocaleDateString('en-AU', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'Australia/Sydney',
   });
 
+  const pHash = portfolioHash(holdings);
+  const dateKey = todayAEST();
+  const cacheKey = userId ? `briefing:${userId}:${dateKey}:${pHash}` : null;
+  const rateLimitKey = userId ? `ratelimit:${userId}:${dateKey}` : null;
+
+  // ── Cache hit ────────────────────────────────────────────────────────────────
+  if (cacheKey && isKvConfigured) {
+    try {
+      const cached = await kv.get<BriefingData>(cacheKey);
+      if (cached) {
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const stock of cached.stocks) {
+              controller.enqueue(encoder.encode(JSON.stringify({ type: 'stock', data: stock }) + '\n'));
+            }
+            controller.enqueue(encoder.encode(
+              JSON.stringify({ type: 'overview', data: cached.overview }) + '\n'
+            ));
+            controller.enqueue(encoder.encode(
+              JSON.stringify({ type: 'done', generated_at: cached.generated_at, news_sourced: cached.news_sourced }) + '\n'
+            ));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
+      }
+    } catch {
+      // KV unavailable — proceed without cache
+    }
+  }
+
+  // ── Rate limiting (skip for cron) ────────────────────────────────────────────
+  if (rateLimitKey && isKvConfigured && !isCron) {
+    try {
+      const count = await kv.incr(rateLimitKey);
+      if (count === 1) await kv.expire(rateLimitKey, 25 * 60 * 60);
+      if (count > 3) {
+        return new Response(
+          JSON.stringify({
+            type: 'error',
+            message: 'Daily regeneration limit reached (3/day). Your briefing refreshes automatically each morning.',
+          }) + '\n',
+          { status: 429, headers: { 'Content-Type': 'application/x-ndjson' } },
+        );
+      }
+    } catch {
+      // KV unavailable — skip rate limiting
+    }
+  }
+
+  // ── Generation ───────────────────────────────────────────────────────────────
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -93,89 +219,32 @@ export async function POST(req: Request) {
       }
 
       try {
-        // ── Phase 1: Search ──────────────────────────────────────────────────
+        // ── Phase 1: Parallel per-ticker search (Haiku) ──────────────────────
         emit({ type: 'progress', message: 'Starting news search…' });
-
-        const tickers = holdings.map(h => h.ticker).join(', ');
-        const searchPrompt = `Today is ${today}. You are researching an ASX portfolio for a morning briefing.
-
-Portfolio tickers: ${tickers}
-
-Search for:
-1. Recent news and ASX company announcements for each ticker (past 2-4 weeks)
-2. Upcoming earnings dates, AGMs, or capital events in the next 1-2 months
-3. Key macro events for this ASX portfolio: RBA decisions, Australian CPI/GDP, China PMI and trade data (critical for miners), US Fed decisions
-4. Any analyst upgrades/downgrades or significant price target changes
-
-For index ETFs (VGS = global equities, VAS = ASX 300, VAE = Asian equities): search for index performance drivers and macro factors.
-
-Summarise what you find. Be specific — include dates, figures, and source context where available. Note explicitly where you couldn't find recent information.`;
 
         let newsContext = '';
         let newsSourced = false;
 
         try {
-          type AnyMessage = {
-            stop_reason: string;
-            content: Array<{ type: string; text?: string; tool_use_id?: string }>;
-          };
-
-          const betaCreate = client.beta.messages.create.bind(client.beta.messages) as (
-            params: unknown
-          ) => Promise<AnyMessage>;
-
-          const messages: Anthropic.MessageParam[] = [{ role: 'user', content: searchPrompt }];
-
-          // Emit per-ticker progress as we go
-          let searchRound = 0;
-          for (let i = 0; i < 25; i++) {
-            if (searchRound < holdings.length) {
-              emit({ type: 'progress', message: `Searching news for ${holdings[searchRound]?.ticker ?? '…'}…` });
-              searchRound++;
-            }
-
-            const response = await betaCreate({
-              model: 'claude-sonnet-4-6',
-              max_tokens: 4096,
-              tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-              messages,
-              betas: ['web-search-2025-03-05'],
-            });
-
-            if (response.stop_reason === 'end_turn') {
-              newsContext = response.content
-                .filter(b => b.type === 'text')
-                .map(b => b.text ?? '')
-                .join('\n');
-              newsSourced = newsContext.length > 0;
-              break;
-            }
-
-            if (response.stop_reason === 'tool_use') {
-              messages.push({ role: 'assistant', content: response.content as Anthropic.ContentBlock[] });
-              const toolResults = response.content
-                .filter(b => b.type === 'tool_result' && b.tool_use_id)
-                .map(b => ({
-                  type: 'tool_result' as const,
-                  tool_use_id: b.tool_use_id!,
-                  content: JSON.stringify(b),
-                }));
-              if (toolResults.length > 0) {
-                messages.push({ role: 'user', content: toolResults });
-              } else {
-                break;
-              }
-            } else {
-              break;
-            }
+          const searchResults = await Promise.all(
+            holdings.map(async (h) => {
+              emit({ type: 'progress', message: `Searching ${h.ticker}…` });
+              const summary = await searchTicker(h.ticker, today);
+              emit({ type: 'progress', message: `✓ ${h.ticker} done` });
+              return { ticker: h.ticker, summary };
+            })
+          );
+          const withData = searchResults.filter(r => r.summary.length > 0);
+          if (withData.length > 0) {
+            newsContext = withData.map(r => `${r.ticker}:\n${r.summary}`).join('\n\n');
+            newsSourced = true;
           }
         } catch {
-          // Web search unavailable — synthesis will note this
           newsContext = '';
           newsSourced = false;
         }
 
-        // ── Phase 2: Synthesis ───────────────────────────────────────────────
+        // ── Phase 2: Synthesis (Sonnet — unchanged) ───────────────────────────
         emit({ type: 'progress', message: 'Generating signals…' });
 
         const holdingsText = holdings
@@ -190,8 +259,7 @@ Summarise what you find. Be specific — include dates, figures, and source cont
 
 Portfolio:
 ${holdingsText}
-${contextSection}
-Signal definitions:
+${contextSection}Signal definitions:
 - ADD: Strengthen this position — thesis is building or entry point is attractive
 - HOLD: Maintain — thesis intact, no action needed today
 - TRIM: Reduce — thesis weakening, position oversized, or risk has increased meaningfully
@@ -219,13 +287,26 @@ ${OUTPUT_SCHEMA}`;
         const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
         const result = JSON.parse(cleaned) as { stocks: StockSignal[]; overview: BriefingOverview };
 
-        // Emit each stock card individually so the frontend can render progressively
+        const generatedAt = new Date().toISOString();
+
         for (const stock of result.stocks) {
           emit({ type: 'stock', data: stock });
         }
-
         emit({ type: 'overview', data: result.overview });
-        emit({ type: 'done', generated_at: new Date().toISOString(), news_sourced: newsSourced });
+        emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced });
+
+        // ── Write to cache ───────────────────────────────────────────────────
+        if (cacheKey && isKvConfigured) {
+          try {
+            await kv.set(
+              cacheKey,
+              { stocks: result.stocks, overview: result.overview, generated_at: generatedAt, news_sourced: newsSourced } satisfies BriefingData,
+              { ex: 25 * 60 * 60 },
+            );
+          } catch {
+            // KV write failed — not critical, user already received their briefing
+          }
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('Briefing stream error:', message);

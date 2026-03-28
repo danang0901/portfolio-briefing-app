@@ -372,7 +372,7 @@ export default function Home() {
       const res = await fetch('/api/briefing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portfolio }),
+        body: JSON.stringify({ portfolio, userId: user?.id ?? '' }),
       });
       if (!res.ok || !res.body) throw new Error('API error');
 
