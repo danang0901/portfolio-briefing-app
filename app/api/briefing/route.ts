@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { kv } from '@vercel/kv';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 60; // News fetch + synthesis; no slow web search iterations
 
 const client = new Anthropic();
 const isKvConfigured = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
@@ -78,64 +78,55 @@ function portfolioHash(holdings: Holding[]): string {
   return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 8);
 }
 
-// Today's date in AEST as YYYY-MM-DD (en-CA locale returns ISO-style date)
+// Today's date in AEST as YYYY-MM-DD
 function todayAEST(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
 }
 
-type AnyMessage = {
-  stop_reason: string;
-  content: Array<{ type: string; text?: string; tool_use_id?: string }>;
+type YahooNewsItem = {
+  title: string;
+  publisher: string;
+  providerPublishTime: number;
 };
 
-// Search news for a single ticker using Haiku (web_search beta, max 4 iterations)
-async function searchTicker(ticker: string, today: string): Promise<string> {
-  const prompt = `Search for recent ASX news for ${ticker}. Today is ${today}.
-Include ALL of the following:
-1. Price-moving events in the past 3 weeks (announcements, results, guidance changes) — include dates and figures
-2. Upcoming catalysts in the next 2 months (earnings, AGM, capital events, macro data releases)
-3. Recent analyst actions (upgrades, downgrades, price target changes)
-For index ETFs (VGS, VAS, VAE): focus on index drivers and macro tailwinds/headwinds instead of #3.
-Be specific — if you can't find recent information, say so explicitly.`;
+type YahooSearchResponse = {
+  news?: YahooNewsItem[];
+};
 
-  const betaCreate = client.beta.messages.create.bind(client.beta.messages) as (
-    params: unknown
-  ) => Promise<AnyMessage>;
+// Fetch recent news headlines for a single ticker from Yahoo Finance (free, no API key)
+async function fetchTickerNews(ticker: string): Promise<string> {
+  try {
+    // ETFs need different search terms for relevant macro news
+    const etfQueries: Record<string, string> = {
+      VGS: 'VGS Vanguard global equities ETF MSCI World',
+      VAS: 'VAS Vanguard ASX 300 ETF Australia market',
+      VAE: 'VAE Vanguard Asian emerging markets ETF',
+    };
+    const query = etfQueries[ticker] ?? `${ticker}.AX`;
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&newsCount=8&quotesCount=0`;
 
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: prompt }];
-
-  for (let i = 0; i < 4; i++) {
-    const response = await betaCreate({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages,
-      betas: ['web-search-2025-03-05'],
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; portfolio-briefing/1.0)' },
+      signal: AbortSignal.timeout(8000), // 8s timeout per ticker
     });
 
-    const text = response.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text ?? '')
+    if (!res.ok) return '';
+
+    const data = await res.json() as YahooSearchResponse;
+    const items = data.news ?? [];
+    if (items.length === 0) return '';
+
+    return items
+      .slice(0, 8)
+      .map(item => {
+        const date = new Date(item.providerPublishTime * 1000)
+          .toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Sydney' });
+        return `[${date}] ${item.title} (${item.publisher})`;
+      })
       .join('\n');
-
-    if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
-      return text;
-    }
-
-    if (response.stop_reason === 'tool_use') {
-      // Push assistant response; server handles web search tool execution automatically.
-      // If no client-side tool_use blocks exist, the text so far is the result.
-      messages.push({ role: 'assistant', content: response.content as Anthropic.ContentBlock[] });
-      const hasClientTools = response.content.some(b => b.type === 'tool_use');
-      if (!hasClientTools) {
-        return text;
-      }
-    } else {
-      return text;
-    }
+  } catch {
+    return ''; // Fail silently — synthesis continues without this ticker's news
   }
-
-  return '';
 }
 
 export async function POST(req: Request) {
@@ -219,24 +210,25 @@ export async function POST(req: Request) {
       }
 
       try {
-        // ── Phase 1: Parallel per-ticker search (Haiku) ──────────────────────
-        emit({ type: 'progress', message: 'Starting news search…' });
+        // ── Phase 1: Fetch news from Yahoo Finance (free, parallel) ───────────
+        emit({ type: 'progress', message: 'Fetching market news…' });
 
         let newsContext = '';
         let newsSourced = false;
 
         try {
-          const searchResults = await Promise.all(
+          const newsResults = await Promise.all(
             holdings.map(async (h) => {
-              emit({ type: 'progress', message: `Searching ${h.ticker}…` });
-              const summary = await searchTicker(h.ticker, today);
-              emit({ type: 'progress', message: `✓ ${h.ticker} done` });
-              return { ticker: h.ticker, summary };
+              emit({ type: 'progress', message: `Fetching ${h.ticker}…` });
+              const news = await fetchTickerNews(h.ticker);
+              if (news) emit({ type: 'progress', message: `✓ ${h.ticker}` });
+              return { ticker: h.ticker, news };
             })
           );
-          const withData = searchResults.filter(r => r.summary.length > 0);
-          if (withData.length > 0) {
-            newsContext = withData.map(r => `${r.ticker}:\n${r.summary}`).join('\n\n');
+
+          const withNews = newsResults.filter(r => r.news.length > 0);
+          if (withNews.length > 0) {
+            newsContext = withNews.map(r => `${r.ticker}:\n${r.news}`).join('\n\n');
             newsSourced = true;
           }
         } catch {
@@ -244,7 +236,7 @@ export async function POST(req: Request) {
           newsSourced = false;
         }
 
-        // ── Phase 2: Synthesis (Sonnet — unchanged) ───────────────────────────
+        // ── Phase 2: Synthesis with Sonnet ────────────────────────────────────
         emit({ type: 'progress', message: 'Generating signals…' });
 
         const holdingsText = holdings
@@ -252,7 +244,7 @@ export async function POST(req: Request) {
           .join('\n');
 
         const contextSection = newsContext
-          ? `\nRecent news and context (sourced via web search):\n${newsContext}\n`
+          ? `\nRecent news headlines:\n${newsContext}\n`
           : '\nNote: Live news unavailable. Base analysis on training data knowledge and note any limitations.\n';
 
         const synthesisPrompt = `You are a senior ASX equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
