@@ -374,10 +374,15 @@ export default function Home() {
     let fromCache = false;
 
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/briefing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portfolio, userId: user?.id ?? '' }),
+        body: JSON.stringify({
+          portfolio,
+          userId: user?.id ?? '',
+          accessToken: session?.access_token ?? '',
+        }),
       });
       if (!res.ok) {
         try {
