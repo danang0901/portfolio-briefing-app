@@ -159,11 +159,15 @@ function StockCard({ stock, price }: { stock: StockSignal; price?: { label: stri
           {stock.country}
         </span>
         <span className="text-xs px-2 py-0.5 rounded-md"
-          style={{ background: '#1c1917', color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
-          <span className="font-mono">{CONFIDENCE_DOTS[stock.confidence] ?? '○○○'} {stock.confidence}</span>
-          <span style={{ color: '#57534e', margin: '0 5px' }}>·</span>
-          <span className="font-medium" style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e' }}>
-            Risk {RISK_ICON[stock.risk_change] ?? '–'}
+          style={{ background: '#1c1917', color: '#a8a29e' }}>
+          <span className="font-mono" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
+            {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
+          </span>
+          {' '}{stock.confidence}
+          <span style={{ color: '#44403c', margin: '0 5px' }}>|</span>
+          Risk{' '}
+          <span style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e' }}>
+            {RISK_ICON[stock.risk_change] ?? '–'}
           </span>
         </span>
       </div>
@@ -375,7 +379,17 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ portfolio, userId: user?.id ?? '' }),
       });
-      if (!res.ok || !res.body) throw new Error('API error');
+      if (!res.ok) {
+        try {
+          const errLine = await res.text();
+          const errData = JSON.parse(errLine.trim().split('\n')[0]);
+          throw new Error(errData.message ?? 'API error');
+        } catch (parseErr) {
+          if (parseErr instanceof Error && parseErr.message !== 'API error') throw parseErr;
+          throw new Error('API error');
+        }
+      }
+      if (!res.body) throw new Error('API error');
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -632,8 +646,8 @@ export default function Home() {
               </p>
             )}
 
-            {/* Completed briefing */}
-            {!briefingLoading && briefingData ? (
+            {/* Completed briefing — shown unless actively streaming new cards */}
+            {briefingData && !(briefingLoading && streamingStocks.length > 0) ? (
               <div className="animate-fade-in">
 
                 {/* Briefing meta */}
