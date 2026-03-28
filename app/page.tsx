@@ -377,13 +377,23 @@ export default function Home() {
     let fromCache = false;
 
     try {
+      // Always fetch a fresh token — stored state may be up to 1h stale
+      let freshToken = accessToken;
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData?.session?.access_token) {
+          freshToken = sessionData.session.access_token;
+          setAccessToken(freshToken);
+        }
+      } catch { /* use cached token if getSession fails */ }
+
       const res = await fetch('/api/briefing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           portfolio,
           userId: user?.id ?? '',
-          accessToken,
+          accessToken: freshToken,
         }),
       });
       if (!res.ok) {
