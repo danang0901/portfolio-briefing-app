@@ -367,6 +367,7 @@ export default function Home() {
     let accumulatedOverview: BriefingOverview | null = null;
     let generatedAt = '';
     let newsSourced = false;
+    let fromCache = false;
 
     try {
       const res = await fetch('/api/briefing', {
@@ -396,7 +397,7 @@ export default function Home() {
               | { type: 'progress'; message: string }
               | { type: 'stock'; data: StockSignal }
               | { type: 'overview'; data: BriefingOverview }
-              | { type: 'done'; generated_at: string; news_sourced: boolean }
+              | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean }
               | { type: 'error'; message: string };
 
             if (event.type === 'progress') {
@@ -409,6 +410,7 @@ export default function Home() {
             } else if (event.type === 'done') {
               generatedAt = event.generated_at;
               newsSourced = event.news_sourced;
+              fromCache = event.from_cache;
             } else if (event.type === 'error') {
               throw new Error(event.message);
             }
@@ -436,14 +438,17 @@ export default function Home() {
       setProgressMessage('');
       saveCachedBriefing(briefing);
 
-      // Store in Supabase if signed in
-      const currentUser = userRef.current;
-      if (currentUser && isSupabaseConfigured) {
-        await supabase.from('briefings').insert({
-          user_id: currentUser.id,
-          briefing_data: briefing,
-          portfolio_snapshot: portfolio,
-        });
+      // Route already stored the briefing server-side — skip client insert to avoid duplicates
+      if (!fromCache && !isSupabaseConfigured) {
+        // Supabase not configured server-side — store from client as fallback
+        const currentUser = userRef.current;
+        if (currentUser) {
+          await supabase.from('briefings').insert({
+            user_id: currentUser.id,
+            briefing_data: briefing,
+            portfolio_snapshot: portfolio,
+          });
+        }
       }
     } catch (err) {
       setBriefingError(

@@ -1,12 +1,20 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
-import { kv } from '@vercel/kv';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // News fetch + synthesis; no slow web search iterations
 
 const client = new Anthropic();
-const isKvConfigured = !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN);
+
+// Supabase service-role client — used for server-side cache and rate limiting
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+const isSupabaseConfigured = Boolean(supabaseUrl && supabaseServiceKey);
+
+function getSupabase() {
+  return createClient(supabaseUrl, supabaseServiceKey);
+}
 
 type Holding = { ticker: string; units: number };
 
@@ -44,7 +52,7 @@ type StreamEvent =
   | { type: 'progress'; message: string }
   | { type: 'stock'; data: StockSignal }
   | { type: 'overview'; data: BriefingOverview }
-  | { type: 'done'; generated_at: string; news_sourced: boolean }
+  | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean }
   | { type: 'error'; message: string };
 
 const OUTPUT_SCHEMA = `{
@@ -72,15 +80,10 @@ const OUTPUT_SCHEMA = `{
   }
 }`;
 
-// 8-char hex SHA-256 of sorted holdings — used in cache key
+// 8-char hex SHA-256 of sorted holdings — used to detect portfolio changes mid-day
 function portfolioHash(holdings: Holding[]): string {
   const sorted = [...holdings].sort((a, b) => a.ticker.localeCompare(b.ticker));
   return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 8);
-}
-
-// Today's date in AEST as YYYY-MM-DD
-function todayAEST(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
 }
 
 type YahooNewsItem = {
@@ -96,7 +99,6 @@ type YahooSearchResponse = {
 // Fetch recent news headlines for a single ticker from Yahoo Finance (free, no API key)
 async function fetchTickerNews(ticker: string): Promise<string> {
   try {
-    // ETFs need different search terms for relevant macro news
     const etfQueries: Record<string, string> = {
       VGS: 'VGS Vanguard global equities ETF MSCI World',
       VAS: 'VAS Vanguard ASX 300 ETF Australia market',
@@ -107,7 +109,7 @@ async function fetchTickerNews(ticker: string): Promise<string> {
 
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; portfolio-briefing/1.0)' },
-      signal: AbortSignal.timeout(8000), // 8s timeout per ticker
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!res.ok) return '';
@@ -125,7 +127,7 @@ async function fetchTickerNews(ticker: string): Promise<string> {
       })
       .join('\n');
   } catch {
-    return ''; // Fail silently — synthesis continues without this ticker's news
+    return '';
   }
 }
 
@@ -150,43 +152,48 @@ export async function POST(req: Request) {
   });
 
   const pHash = portfolioHash(holdings);
-  const dateKey = todayAEST();
-  const cacheKey = userId ? `briefing:${userId}:${dateKey}:${pHash}` : null;
-  const rateLimitKey = userId ? `ratelimit:${userId}:${dateKey}` : null;
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  // ── Cache hit ────────────────────────────────────────────────────────────────
-  if (cacheKey && isKvConfigured) {
+  // ── Cache check + rate limiting (Supabase briefings table) ──────────────────
+  if (userId && isSupabaseConfigured && !isCron) {
     try {
-      const cached = await kv.get<BriefingData>(cacheKey);
+      const { data: cached } = await getSupabase()
+        .from('briefings')
+        .select('briefing_data, portfolio_snapshot')
+        .eq('user_id', userId)
+        .gte('created_at', twentyFourHoursAgo)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
       if (cached) {
-        const encoder = new TextEncoder();
-        const stream = new ReadableStream({
-          start(controller) {
-            for (const stock of cached.stocks) {
-              controller.enqueue(encoder.encode(JSON.stringify({ type: 'stock', data: stock }) + '\n'));
-            }
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ type: 'overview', data: cached.overview }) + '\n'
-            ));
-            controller.enqueue(encoder.encode(
-              JSON.stringify({ type: 'done', generated_at: cached.generated_at, news_sourced: cached.news_sourced }) + '\n'
-            ));
-            controller.close();
-          },
-        });
-        return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
-      }
-    } catch {
-      // KV unavailable — proceed without cache
-    }
-  }
+        // Compute hash of the stored snapshot to detect portfolio changes
+        const cachedHash = cached.portfolio_snapshot
+          ? portfolioHash(cached.portfolio_snapshot as Holding[])
+          : null;
 
-  // ── Rate limiting (skip for cron) ────────────────────────────────────────────
-  if (rateLimitKey && isKvConfigured && !isCron) {
-    try {
-      const count = await kv.incr(rateLimitKey);
-      if (count === 1) await kv.expire(rateLimitKey, 25 * 60 * 60);
-      if (count > 1) {
+        if (cachedHash === pHash) {
+          // Same portfolio — serve the cached briefing
+          const briefing = cached.briefing_data as BriefingData;
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              for (const stock of briefing.stocks) {
+                controller.enqueue(encoder.encode(JSON.stringify({ type: 'stock', data: stock }) + '\n'));
+              }
+              controller.enqueue(encoder.encode(
+                JSON.stringify({ type: 'overview', data: briefing.overview }) + '\n'
+              ));
+              controller.enqueue(encoder.encode(
+                JSON.stringify({ type: 'done', generated_at: briefing.generated_at, news_sourced: briefing.news_sourced, from_cache: true }) + '\n'
+              ));
+              controller.close();
+            },
+          });
+          return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
+        }
+
+        // Portfolio changed mid-day — block regeneration (still within 24h window)
         return new Response(
           JSON.stringify({
             type: 'error',
@@ -196,7 +203,7 @@ export async function POST(req: Request) {
         );
       }
     } catch {
-      // KV unavailable — skip rate limiting
+      // Supabase unavailable — proceed without cache/rate limiting
     }
   }
 
@@ -290,14 +297,12 @@ ${OUTPUT_SCHEMA}`;
           for (const ch of chunk.delta.text) {
             accumulated += ch;
 
-            // String escape tracking
             if (esc) { esc = false; continue; }
             if (ch === '\\' && inStr) { esc = true; continue; }
             if (ch === '"') { inStr = !inStr; continue; }
             if (inStr) continue;
 
             if (parseState === 'before_stocks') {
-              // Wait for `"stocks": [`
               if (ch === '[') {
                 const tail = accumulated.slice(-40);
                 if (/"stocks"\s*:\s*\[$/.test(tail)) {
@@ -321,7 +326,7 @@ ${OUTPUT_SCHEMA}`;
                       emittedTickers.add(stock.ticker);
                     }
                   } catch {
-                    // Partial object — will be caught by finalMessage fallback
+                    // Partial object — caught by finalMessage fallback below
                   }
                   objectStart = -1;
                 }
@@ -338,7 +343,6 @@ ${OUTPUT_SCHEMA}`;
         const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
         const result = JSON.parse(cleaned) as { stocks: StockSignal[]; overview: BriefingOverview };
 
-        // Emit any stocks missed by the incremental parser
         for (const stock of result.stocks) {
           if (!emittedTickers.has(stock.ticker)) {
             emit({ type: 'stock', data: stock });
@@ -347,18 +351,18 @@ ${OUTPUT_SCHEMA}`;
 
         const generatedAt = new Date().toISOString();
         emit({ type: 'overview', data: result.overview });
-        emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced });
+        emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced, from_cache: false });
 
-        // ── Write to cache ───────────────────────────────────────────────────
-        if (cacheKey && isKvConfigured) {
+        // ── Store in Supabase (server-side) so the next request hits cache ────
+        if (userId && isSupabaseConfigured) {
           try {
-            await kv.set(
-              cacheKey,
-              { stocks: result.stocks, overview: result.overview, generated_at: generatedAt, news_sourced: newsSourced } satisfies BriefingData,
-              { ex: 25 * 60 * 60 },
-            );
+            await getSupabase().from('briefings').insert({
+              user_id: userId,
+              briefing_data: { stocks: result.stocks, overview: result.overview, generated_at: generatedAt, news_sourced: newsSourced } satisfies BriefingData,
+              portfolio_snapshot: holdings,
+            });
           } catch {
-            // KV write failed — not critical, user already received their briefing
+            // Insert failed — not critical, user already received their briefing
           }
         }
       } catch (err) {
