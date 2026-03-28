@@ -348,7 +348,7 @@ export default function Home() {
 
   // Countdown to next allowed regeneration (24h from last generated_at)
   useEffect(() => {
-    const generatedAt = briefingData?.generated_at;
+    const generatedAt = briefingData?.generated_at ?? '';
     if (!generatedAt) { setCountdown(''); return; }
     function tick() {
       const remaining = new Date(generatedAt).getTime() + 24 * 60 * 60 * 1000 - Date.now();
