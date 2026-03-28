@@ -236,6 +236,7 @@ export default function Home() {
   const [user, setUser]                 = useState<User | null>(null);
   const [accessToken, setAccessToken]   = useState('');
   const [authLoading, setAuthLoading]   = useState(true);
+  const [countdown, setCountdown]       = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const portfolioRef = useRef<Holding[]>(DEFAULT_PORTFOLIO);
@@ -344,6 +345,23 @@ export default function Home() {
       fetchPrices(briefingData.stocks.map(s => s.ticker));
     }
   }, [briefingData, fetchPrices]);
+
+  // Countdown to next allowed regeneration (24h from last generated_at)
+  useEffect(() => {
+    const generatedAt = briefingData?.generated_at;
+    if (!generatedAt) { setCountdown(''); return; }
+    function tick() {
+      const remaining = new Date(generatedAt).getTime() + 24 * 60 * 60 * 1000 - Date.now();
+      if (remaining <= 0) { setCountdown(''); return; }
+      const h = Math.floor(remaining / 3600000);
+      const m = Math.floor((remaining % 3600000) / 60000);
+      const s = Math.floor((remaining % 60000) / 1000);
+      setCountdown(`${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+    }
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [briefingData?.generated_at]);
 
   // ── Auth actions ───────────────────────────────────────────────────────────
   async function signIn() {
@@ -612,6 +630,24 @@ export default function Home() {
                 </svg>
                 Sign in with Google to generate briefing
               </button>
+            ) : countdown ? (
+              <div className="mb-2">
+                <button
+                  disabled
+                  className="w-full py-3 rounded-xl text-sm font-semibold transition-all"
+                  style={{ background: 'var(--border)', color: 'var(--text-muted)', cursor: 'not-allowed' }}>
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/>
+                      <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    Next briefing in {countdown}
+                  </span>
+                </button>
+                <p className="text-xs text-center mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Briefings refresh automatically every 24 hours
+                </p>
+              </div>
             ) : (
               <button
                 onClick={generateBriefing}
