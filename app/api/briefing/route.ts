@@ -155,9 +155,11 @@ export async function POST(req: Request) {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   // ── Cache check + rate limiting (Supabase briefings table) ──────────────────
+  console.log('[briefing] userId:', userId || '(empty)', '| supabaseConfigured:', isSupabaseConfigured, '| isCron:', isCron);
+
   if (userId && isSupabaseConfigured && !isCron) {
     try {
-      const { data: cached } = await getSupabase()
+      const { data: cached, error: cacheError } = await getSupabase()
         .from('briefings')
         .select('briefing_data, portfolio_snapshot')
         .eq('user_id', userId)
@@ -165,6 +167,10 @@ export async function POST(req: Request) {
         .order('created_at', { ascending: false })
         .limit(1)
         .single();
+
+      if (cacheError && cacheError.code !== 'PGRST116') {
+        console.error('[briefing] Cache query error:', cacheError.code, cacheError.message);
+      }
 
       if (cached) {
         // Compute hash of the stored snapshot to detect portfolio changes
@@ -356,13 +362,18 @@ ${OUTPUT_SCHEMA}`;
         // ── Store in Supabase (server-side) so the next request hits cache ────
         if (userId && isSupabaseConfigured) {
           try {
-            await getSupabase().from('briefings').insert({
+            const { error: insertError } = await getSupabase().from('briefings').insert({
               user_id: userId,
               briefing_data: { stocks: result.stocks, overview: result.overview, generated_at: generatedAt, news_sourced: newsSourced } satisfies BriefingData,
               portfolio_snapshot: holdings,
             });
-          } catch {
-            // Insert failed — not critical, user already received their briefing
+            if (insertError) {
+              console.error('[briefing] Insert error:', insertError.code, insertError.message);
+            } else {
+              console.log('[briefing] Stored in Supabase for', userId);
+            }
+          } catch (e) {
+            console.error('[briefing] Insert exception:', e);
           }
         }
       } catch (err) {
