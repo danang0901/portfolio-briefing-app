@@ -239,19 +239,16 @@ export default function Home() {
   const [progressMessage, setProgressMessage]   = useState('');
   const [streamingStocks, setStreamingStocks]   = useState<StockSignal[]>([]);
   const [prices, setPrices]             = useState<PriceMap>({});
-  const [nlInput, setNlInput]           = useState('');
-  const [nlLoading, setNlLoading]       = useState(false);
-  const [nlError, setNlError]           = useState('');
   const [editing, setEditing]           = useState<EditingState | null>(null);
   const [user, setUser]                 = useState<User | null>(null);
   const [accessToken, setAccessToken]   = useState('');
   const [authLoading, setAuthLoading]   = useState(true);
   const [countdown, setCountdown]       = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const portfolioRef = useRef<Holding[]>(DEFAULT_PORTFOLIO);
   const userRef      = useRef<User | null>(null);
   const portfolioInitialized = useRef(false);
+  const editCancelledRef = useRef(false);
 
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
   useEffect(() => { userRef.current = user; }, [user]);
@@ -516,45 +513,22 @@ export default function Home() {
     }
   }
 
-  // ── Portfolio NL update ────────────────────────────────────────────────────
-  async function updatePortfolio() {
-    const cmd = nlInput.trim();
-    if (!cmd) return;
-    setNlLoading(true);
-    setNlError('');
-    try {
-      const res = await fetch('/api/portfolio', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portfolio, command: cmd }),
-      });
-      if (!res.ok) throw new Error('API error');
-      const data = await res.json();
-      if (data.error) {
-        setNlError(data.error);
-      } else {
-        setPortfolio(data.portfolio);
-        setHistory(prev => [{
-          time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
-          description: data.description,
-        }, ...prev]);
-        setNlInput('');
-      }
-    } catch {
-      setNlError('Something went wrong. Please try again.');
-    } finally {
-      setNlLoading(false);
-      inputRef.current?.focus();
+  function removeHolding(index: number) {
+    const ticker = portfolio[index]?.ticker;
+    setPortfolio(p => p.filter((_, i) => i !== index));
+    setEditing(null);
+    if (ticker) {
+      setHistory(prev => [{
+        time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
+        description: `Removed ${ticker}`,
+      }, ...prev]);
     }
   }
 
-  function removeHolding(ticker: string) {
-    setPortfolio(p => p.filter(h => h.ticker !== ticker));
-    setEditing(null);
-    setHistory(prev => [{
-      time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
-      description: `Removed ${ticker}`,
-    }, ...prev]);
+  function addHolding() {
+    const newIndex = portfolio.length;
+    setPortfolio(p => [...p, { ticker: '', units: 1, market: 'ASX' }]);
+    setEditing({ index: newIndex, field: 'ticker', previousValue: '' });
   }
 
   function startEdit(index: number, field: 'ticker' | 'units' | 'market', previousValue: string | number) {
@@ -562,28 +536,39 @@ export default function Home() {
   }
 
   function commitEdit(index: number, field: 'ticker' | 'units' | 'market', rawValue: string) {
+    if (editCancelledRef.current) { editCancelledRef.current = false; return; }
+    editCancelledRef.current = false;
+    const isNewRow = portfolio[index]?.ticker === '';
     if (field === 'ticker') {
       const ticker = validateTicker(rawValue);
-      if (!ticker) { setEditing(null); return; }
-      // Guard against duplicate tickers
-      if (portfolio.some((h, j) => j !== index && h.ticker === ticker)) { setEditing(null); return; }
+      if (!ticker || portfolio.some((h, j) => j !== index && h.ticker === ticker)) {
+        if (isNewRow) setPortfolio(p => p.filter((_, i) => i !== index));
+        setEditing(null);
+        return;
+      }
+      if (!isNewRow && ticker === portfolio[index].ticker) { setEditing(null); return; }
       setPortfolio(p => p.map((h, i) => i === index ? { ...h, ticker } : h));
       setHistory(prev => [{
         time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
-        description: `Renamed to ${ticker}`,
+        description: isNewRow ? `Added ${ticker}` : `Renamed to ${ticker}`,
       }, ...prev]);
     } else if (field === 'units') {
       const units = validateUnits(rawValue);
-      if (!units) { setEditing(null); return; }
+      if (!units || units === portfolio[index]?.units) { setEditing(null); return; }
       setPortfolio(p => p.map((h, i) => i === index ? { ...h, units } : h));
     } else if (field === 'market') {
       const market = rawValue as 'ASX' | 'NASDAQ' | 'NYSE';
+      if (market === portfolio[index]?.market) { setEditing(null); return; }
       setPortfolio(p => p.map((h, i) => i === index ? { ...h, market } : h));
     }
     setEditing(null);
   }
 
   function cancelEdit() {
+    editCancelledRef.current = true;
+    if (editing && portfolio[editing.index]?.ticker === '') {
+      setPortfolio(p => p.filter((_, i) => i !== editing!.index));
+    }
     setEditing(null);
   }
 
@@ -846,7 +831,7 @@ export default function Home() {
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
               {/* Header */}
               <div className="grid px-4 py-2 text-xs font-medium tracking-wider"
-                style={{ gridTemplateColumns: '1fr 72px 60px 28px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+                style={{ gridTemplateColumns: '1fr 88px 60px 32px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
                 <span>TICKER</span>
                 <span>EXCHANGE</span>
                 <span className="text-right">UNITS</span>
@@ -855,19 +840,20 @@ export default function Home() {
 
               {portfolio.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                  No holdings. Use the box below to add some.
+                  No holdings yet. Tap + below to add one.
                 </div>
               ) : (
                 portfolio.map((h, i) => (
                   <div key={`${h.ticker}-${i}`}
-                    className="grid items-center px-4 py-3 group"
-                    style={{ gridTemplateColumns: '1fr 72px 60px 28px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                    className="grid items-center px-4 py-3"
+                    style={{ gridTemplateColumns: '1fr 88px 60px 32px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
 
                     {/* Ticker cell */}
                     {editing?.index === i && editing.field === 'ticker' ? (
                       <input
                         autoFocus
                         defaultValue={h.ticker}
+                        placeholder="TICKER"
                         className="font-mono font-semibold text-sm bg-transparent outline-none border-b w-full"
                         style={{ color: 'var(--text-primary)', borderColor: 'var(--accent)' }}
                         onBlur={e => commitEdit(i, 'ticker', e.currentTarget.value)}
@@ -880,7 +866,7 @@ export default function Home() {
                       <span
                         className="font-mono font-semibold text-sm cursor-text"
                         style={{ color: 'var(--text-primary)' }}
-                        onMouseDown={() => startEdit(i, 'ticker', h.ticker)}>
+                        onClick={() => startEdit(i, 'ticker', h.ticker)}>
                         {h.ticker}
                       </span>
                     )}
@@ -903,7 +889,7 @@ export default function Home() {
                       <span
                         className="text-xs font-mono cursor-pointer px-1.5 py-0.5 rounded inline-block"
                         style={{ background: '#1c1917', color: '#a8a29e' }}
-                        onMouseDown={() => startEdit(i, 'market', h.market)}>
+                        onClick={() => startEdit(i, 'market', h.market)}>
                         {h.market}
                       </span>
                     )}
@@ -928,15 +914,15 @@ export default function Home() {
                       <span
                         className="text-sm tabular-nums text-right cursor-text block"
                         style={{ color: '#9ca3af' }}
-                        onMouseDown={() => startEdit(i, 'units', h.units)}>
+                        onClick={() => startEdit(i, 'units', h.units)}>
                         {h.units.toLocaleString()}
                       </span>
                     )}
 
-                    {/* Delete */}
+                    {/* Delete — always visible */}
                     <button
-                      onClick={() => removeHolding(h.ticker)}
-                      className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded transition-all text-xs"
+                      onClick={() => removeHolding(i)}
+                      className="w-5 h-5 flex items-center justify-center rounded text-xs ml-auto"
                       style={{ color: 'var(--text-muted)' }}
                       onMouseOver={e => (e.currentTarget.style.color = 'var(--danger)')}
                       onMouseOut={e => (e.currentTarget.style.color = 'var(--text-muted)')}
@@ -945,48 +931,24 @@ export default function Home() {
                 ))
               )}
 
-              {portfolio.length > 0 && (
+              {/* Add holding */}
+              <button
+                onClick={addHolding}
+                className="w-full py-3 text-sm flex items-center justify-center gap-1.5 transition-colors"
+                style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)', background: 'none', cursor: 'pointer' }}
+                onMouseOver={e => (e.currentTarget.style.color = 'var(--text-primary)')}
+                onMouseOut={e => (e.currentTarget.style.color = 'var(--text-muted)')}>
+                + Add holding
+              </button>
+
+              {portfolio.filter(h => h.ticker !== '').length > 0 && (
                 <div className="flex justify-between px-4 py-2 text-xs"
                   style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                  <span>{portfolio.length} holdings</span>
+                  <span>{portfolio.filter(h => h.ticker !== '').length} holdings</span>
                   <span>{totalUnits.toLocaleString()} total units</span>
                 </div>
               )}
             </div>
-
-            {/* Natural language input */}
-            <div className="flex gap-2 mb-2">
-              <input
-                ref={inputRef}
-                value={nlInput}
-                onChange={e => setNlInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !nlLoading && updatePortfolio()}
-                placeholder='e.g. "Add 50 AAPL" or "Add 30 NASDAQ:AAPL" or "Set TLS to 300"'
-                className="flex-1 px-4 py-2.5 rounded-xl text-sm outline-none"
-                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
-                onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                onBlur={e => (e.currentTarget.style.borderColor = 'var(--border)')}
-              />
-              <button
-                onClick={updatePortfolio}
-                disabled={nlLoading || !nlInput.trim()}
-                className="px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
-                style={{
-                  background: nlLoading || !nlInput.trim() ? 'var(--border)' : 'var(--accent)',
-                  color: nlLoading || !nlInput.trim() ? 'var(--text-muted)' : '#fff',
-                  cursor: nlLoading || !nlInput.trim() ? 'not-allowed' : 'pointer',
-                  minWidth: '72px',
-                }}>
-                {nlLoading ? '…' : 'Update'}
-              </button>
-            </div>
-
-            {nlError && (
-              <p className="text-xs mb-4 px-3 py-2 rounded-lg"
-                style={{ background: '#450a0a', color: '#fca5a5' }}>
-                {nlError}
-              </p>
-            )}
 
             {history.length > 0 && (
               <div className="mt-5">
