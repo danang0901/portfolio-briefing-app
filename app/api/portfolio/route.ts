@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 
 const client = new Anthropic();
 
-type Holding = { ticker: string; units: number };
+type Holding = { ticker: string; units: number; market: 'ASX' | 'NASDAQ' | 'NYSE' };
 
 export async function POST(req: Request) {
   const { portfolio, command } = await req.json();
@@ -30,9 +30,13 @@ Rules:
 - "Set TICKER to X" / "TICKER = X" → set units to X
 - If no quantity is mentioned when adding, default to 1 unit
 - If ambiguous or invalid, return an error
+- If the user specifies an exchange (e.g. "Add 30 NASDAQ:AAPL" or "Add 30 AAPL on NASDAQ"), use it for the market field
+- Default new holdings to market: "ASX" if no exchange is specified
+- Always include "market" on every holding in the output array (preserve existing values on unchanged holdings)
+- market must be one of: "ASX", "NASDAQ", "NYSE"
 
 Respond with ONLY valid JSON:
-Success: {"portfolio": [...], "description": "summary of change"}
+Success: {"portfolio": [{"ticker": "...", "units": 0, "market": "ASX"}], "description": "summary of change"}
 Error:   {"error": "explanation"}`,
       },
     ],

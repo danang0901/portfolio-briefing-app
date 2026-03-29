@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { validateTicker, validateUnits } from '@/lib/portfolio-validators';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import type { BriefingData, BriefingOverview, StockSignal } from '@/app/api/briefing/route';
 
-type Holding = { ticker: string; units: number };
+type Holding = { ticker: string; units: number; market: 'ASX' | 'NASDAQ' | 'NYSE' };
 type HistoryEntry = { time: string; description: string };
 type PriceMap = Record<string, { label: string; direction: 'up' | 'down' | 'flat' | null }>;
+type EditingState = { index: number; field: 'ticker' | 'units' | 'market'; previousValue: string | number };
 
 // ── Signal styling ────────────────────────────────────────────────────────────
 
@@ -54,12 +56,12 @@ const STORAGE_KEY  = 'portfolio-briefing-holdings';
 const BRIEFING_KEY = 'portfolio-briefing-cached';
 
 const DEFAULT_PORTFOLIO: Holding[] = [
-  { ticker: 'BHP',  units: 100 },
-  { ticker: 'CBA',  units: 50  },
-  { ticker: 'TLS',  units: 200 },
-  { ticker: 'WOW',  units: 75  },
-  { ticker: 'VGS',  units: 100 },
-  { ticker: 'VAS',  units: 50  },
+  { ticker: 'BHP',  units: 100, market: 'ASX' },
+  { ticker: 'CBA',  units: 50,  market: 'ASX' },
+  { ticker: 'TLS',  units: 200, market: 'ASX' },
+  { ticker: 'WOW',  units: 75,  market: 'ASX' },
+  { ticker: 'VGS',  units: 100, market: 'ASX' },
+  { ticker: 'VAS',  units: 50,  market: 'ASX' },
 ];
 
 function loadPortfolio(): Holding[] {
@@ -68,7 +70,13 @@ function loadPortfolio(): Holding[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_PORTFOLIO;
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Coerce legacy holdings without market field to ASX
+      return parsed.map((h: Partial<Holding>) => ({
+        ...h,
+        market: h.market ?? 'ASX',
+      })) as Holding[];
+    }
   } catch {}
   return DEFAULT_PORTFOLIO;
 }
@@ -102,11 +110,12 @@ function saveCachedBriefing(data: BriefingData) {
 
 // ── TradingView Chart ─────────────────────────────────────────────────────────
 
-function TradingViewChart({ ticker }: { ticker: string }) {
+function TradingViewChart({ ticker, market = 'ASX' }: { ticker: string; market?: string }) {
+  const symbol = `${market}:${ticker}`;
   return (
     <div style={{ borderRadius: '8px', overflow: 'hidden', marginTop: '12px' }}>
       <iframe
-        src={`https://www.tradingview.com/widgetembed/?symbol=ASX:${ticker}&interval=D&theme=dark&style=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&calendar=0&hotlist=0&details=0&hide_top_toolbar=0&hide_legend=0`}
+        src={`https://www.tradingview.com/widgetembed/?symbol=${symbol}&interval=D&theme=dark&style=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&calendar=0&hotlist=0&details=0&hide_top_toolbar=0&hide_legend=0`}
         width="100%"
         height="280"
         frameBorder="0"
@@ -119,7 +128,7 @@ function TradingViewChart({ ticker }: { ticker: string }) {
 
 // ── Stock Signal Card ─────────────────────────────────────────────────────────
 
-function StockCard({ stock, price }: { stock: StockSignal; price?: { label: string; direction: 'up' | 'down' | 'flat' | null } }) {
+function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price?: { label: string; direction: 'up' | 'down' | 'flat' | null }; market?: string }) {
   const [chartOpen, setChartOpen] = useState(false);
 
   return (
@@ -213,7 +222,7 @@ function StockCard({ stock, price }: { stock: StockSignal; price?: { label: stri
         <span>{chartOpen ? 'Hide chart' : 'View chart'}</span>
       </button>
 
-      {chartOpen && <TradingViewChart ticker={stock.ticker} />}
+      {chartOpen && <TradingViewChart ticker={stock.ticker} market={market} />}
     </div>
   );
 }
@@ -233,6 +242,7 @@ export default function Home() {
   const [nlInput, setNlInput]           = useState('');
   const [nlLoading, setNlLoading]       = useState(false);
   const [nlError, setNlError]           = useState('');
+  const [editing, setEditing]           = useState<EditingState | null>(null);
   const [user, setUser]                 = useState<User | null>(null);
   const [accessToken, setAccessToken]   = useState('');
   const [authLoading, setAuthLoading]   = useState(true);
@@ -277,7 +287,9 @@ export default function Home() {
           .single();
 
         if (portData != null && Array.isArray(portData.holdings) && portData.holdings.length > 0) {
-          setPortfolio(portData.holdings);
+          // Coerce legacy holdings without market field to ASX
+          const coerced = portData.holdings.map((h: Partial<Holding>) => ({ ...h, market: h.market ?? 'ASX' })) as Holding[];
+          setPortfolio(coerced);
         } else {
           await supabase.from('portfolios').upsert({
             user_id: currentUser.id,
@@ -327,12 +339,12 @@ export default function Home() {
   }, [portfolio]);
 
   // ── Fetch prices whenever briefing data changes ────────────────────────────
-  const fetchPrices = useCallback(async (tickers: string[]) => {
+  const fetchPrices = useCallback(async (holdings: { ticker: string; market: string }[]) => {
     try {
       const res = await fetch('/api/prices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tickers }),
+        body: JSON.stringify({ holdings }),
       });
       if (!res.ok) return;
       const { prices: data } = await res.json();
@@ -342,7 +354,11 @@ export default function Home() {
 
   useEffect(() => {
     if (briefingData?.stocks?.length) {
-      fetchPrices(briefingData.stocks.map(s => s.ticker));
+      const holdingsForPrices = briefingData.stocks.map(s => ({
+        ticker: s.ticker,
+        market: portfolioRef.current.find(h => h.ticker === s.ticker)?.market ?? 'ASX',
+      }));
+      fetchPrices(holdingsForPrices);
     }
   }, [briefingData, fetchPrices]);
 
@@ -534,13 +550,48 @@ export default function Home() {
 
   function removeHolding(ticker: string) {
     setPortfolio(p => p.filter(h => h.ticker !== ticker));
+    setEditing(null);
     setHistory(prev => [{
       time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
       description: `Removed ${ticker}`,
     }, ...prev]);
   }
 
+  function startEdit(index: number, field: 'ticker' | 'units' | 'market', previousValue: string | number) {
+    setEditing({ index, field, previousValue });
+  }
+
+  function commitEdit(index: number, field: 'ticker' | 'units' | 'market', rawValue: string) {
+    if (field === 'ticker') {
+      const ticker = validateTicker(rawValue);
+      if (!ticker) { setEditing(null); return; }
+      // Guard against duplicate tickers
+      if (portfolio.some((h, j) => j !== index && h.ticker === ticker)) { setEditing(null); return; }
+      setPortfolio(p => p.map((h, i) => i === index ? { ...h, ticker } : h));
+      setHistory(prev => [{
+        time: new Date().toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' }),
+        description: `Renamed to ${ticker}`,
+      }, ...prev]);
+    } else if (field === 'units') {
+      const units = validateUnits(rawValue);
+      if (!units) { setEditing(null); return; }
+      setPortfolio(p => p.map((h, i) => i === index ? { ...h, units } : h));
+    } else if (field === 'market') {
+      const market = rawValue as 'ASX' | 'NASDAQ' | 'NYSE';
+      setPortfolio(p => p.map((h, i) => i === index ? { ...h, market } : h));
+    }
+    setEditing(null);
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+  }
+
   const totalUnits = portfolio.reduce((s, h) => s + h.units, 0);
+
+  // Market lookup map for TradingView charts and price fetching
+  const marketMap: Record<string, 'ASX' | 'NASDAQ' | 'NYSE'> = {};
+  for (const h of portfolio) { marketMap[h.ticker] = h.market; }
   const today = new Date().toLocaleDateString('en-AU', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
@@ -674,7 +725,7 @@ export default function Home() {
             {briefingLoading && streamingStocks.length > 0 && (
               <div className="mb-2 animate-fade-in">
                 {streamingStocks.map(stock => (
-                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} />
+                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} />
                 ))}
                 <p className="text-xs text-center py-2" style={{ color: 'var(--text-muted)' }}>
                   Loading remaining holdings…
@@ -743,7 +794,7 @@ export default function Home() {
 
                 {/* ── Stock Signal Cards ── */}
                 {briefingData.stocks.map(stock => (
-                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} />
+                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} />
                 ))}
 
                 {/* ── Portfolio Overview ── */}
@@ -793,10 +844,13 @@ export default function Home() {
           <div className="animate-fade-in">
             <div className="rounded-xl overflow-hidden mb-4"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-              <div className="flex justify-between px-4 py-2 text-xs font-medium tracking-wider"
-                style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+              {/* Header */}
+              <div className="grid px-4 py-2 text-xs font-medium tracking-wider"
+                style={{ gridTemplateColumns: '1fr 72px 60px 28px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
                 <span>TICKER</span>
-                <span>UNITS</span>
+                <span>EXCHANGE</span>
+                <span className="text-right">UNITS</span>
+                <span />
               </div>
 
               {portfolio.length === 0 ? (
@@ -805,24 +859,88 @@ export default function Home() {
                 </div>
               ) : (
                 portfolio.map((h, i) => (
-                  <div key={h.ticker}
-                    className="flex items-center justify-between px-4 py-3 group"
-                    style={{ borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
-                    <span className="font-mono font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
-                      {h.ticker}
-                    </span>
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm tabular-nums" style={{ color: '#9ca3af' }}>
+                  <div key={`${h.ticker}-${i}`}
+                    className="grid items-center px-4 py-3 group"
+                    style={{ gridTemplateColumns: '1fr 72px 60px 28px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+
+                    {/* Ticker cell */}
+                    {editing?.index === i && editing.field === 'ticker' ? (
+                      <input
+                        autoFocus
+                        defaultValue={h.ticker}
+                        className="font-mono font-semibold text-sm bg-transparent outline-none border-b w-full"
+                        style={{ color: 'var(--text-primary)', borderColor: 'var(--accent)' }}
+                        onBlur={e => commitEdit(i, 'ticker', e.currentTarget.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') cancelEdit();
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="font-mono font-semibold text-sm cursor-text"
+                        style={{ color: 'var(--text-primary)' }}
+                        onMouseDown={() => startEdit(i, 'ticker', h.ticker)}>
+                        {h.ticker}
+                      </span>
+                    )}
+
+                    {/* Market badge / select */}
+                    {editing?.index === i && editing.field === 'market' ? (
+                      <select
+                        autoFocus
+                        value={h.market}
+                        className="text-xs bg-transparent outline-none"
+                        style={{ color: 'var(--text-primary)', border: '1px solid var(--accent)', borderRadius: '4px', padding: '2px 4px', background: 'var(--bg-card)' }}
+                        onChange={e => commitEdit(i, 'market', e.target.value)}
+                        onBlur={e => commitEdit(i, 'market', e.target.value)}
+                        onKeyDown={e => e.key === 'Escape' && cancelEdit()}>
+                        <option value="ASX">ASX</option>
+                        <option value="NASDAQ">NASDAQ</option>
+                        <option value="NYSE">NYSE</option>
+                      </select>
+                    ) : (
+                      <span
+                        className="text-xs font-mono cursor-pointer px-1.5 py-0.5 rounded inline-block"
+                        style={{ background: '#1c1917', color: '#a8a29e' }}
+                        onMouseDown={() => startEdit(i, 'market', h.market)}>
+                        {h.market}
+                      </span>
+                    )}
+
+                    {/* Units cell */}
+                    {editing?.index === i && editing.field === 'units' ? (
+                      <input
+                        autoFocus
+                        type="number"
+                        min="1"
+                        step="1"
+                        defaultValue={h.units}
+                        className="text-sm tabular-nums text-right bg-transparent outline-none border-b w-full"
+                        style={{ color: 'var(--text-primary)', borderColor: 'var(--accent)' }}
+                        onBlur={e => commitEdit(i, 'units', e.currentTarget.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') cancelEdit();
+                        }}
+                      />
+                    ) : (
+                      <span
+                        className="text-sm tabular-nums text-right cursor-text block"
+                        style={{ color: '#9ca3af' }}
+                        onMouseDown={() => startEdit(i, 'units', h.units)}>
                         {h.units.toLocaleString()}
                       </span>
-                      <button
-                        onClick={() => removeHolding(h.ticker)}
-                        className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded transition-all text-xs"
-                        style={{ color: 'var(--text-muted)' }}
-                        onMouseOver={e => (e.currentTarget.style.color = 'var(--danger)')}
-                        onMouseOut={e => (e.currentTarget.style.color = 'var(--text-muted)')}
-                        aria-label={`Remove ${h.ticker}`}>✕</button>
-                    </div>
+                    )}
+
+                    {/* Delete */}
+                    <button
+                      onClick={() => removeHolding(h.ticker)}
+                      className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded transition-all text-xs"
+                      style={{ color: 'var(--text-muted)' }}
+                      onMouseOver={e => (e.currentTarget.style.color = 'var(--danger)')}
+                      onMouseOut={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+                      aria-label={`Remove ${h.ticker}`}>✕</button>
                   </div>
                 ))
               )}
@@ -843,7 +961,7 @@ export default function Home() {
                 value={nlInput}
                 onChange={e => setNlInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !nlLoading && updatePortfolio()}
-                placeholder='e.g. "Add 50 NDQ" or "Set TLS to 300" or "Remove VGS"'
+                placeholder='e.g. "Add 50 AAPL" or "Add 30 NASDAQ:AAPL" or "Set TLS to 300"'
                 className="flex-1 px-4 py-2.5 rounded-xl text-sm outline-none"
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
                 onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}

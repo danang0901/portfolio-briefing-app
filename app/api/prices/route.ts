@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
+import { toYahooSymbol } from '@/lib/yahoo-symbol';
 
 export const revalidate = 3600; // cache 1 hour at edge
+
+type HoldingInput = { ticker: string; market: string };
 
 type PriceResult = {
   ticker: string;
@@ -10,9 +13,8 @@ type PriceResult = {
 };
 
 // Yahoo Finance unofficial chart API — no key required
-async function fetchPrice(ticker: string): Promise<PriceResult> {
-  // ASX tickers need .AX suffix; ETFs on ASX also use .AX
-  const symbol = `${ticker}.AX`;
+async function fetchPrice(ticker: string, market: string): Promise<PriceResult> {
+  const symbol = toYahooSymbol(ticker, market);
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=7d`;
 
   try {
@@ -50,13 +52,23 @@ async function fetchPrice(ticker: string): Promise<PriceResult> {
 }
 
 export async function POST(req: Request) {
-  const { tickers } = (await req.json()) as { tickers: string[] };
+  const body = await req.json();
 
-  if (!Array.isArray(tickers) || tickers.length === 0) {
+  // Accept { holdings: [{ ticker, market }] } or legacy { tickers: string[] }
+  let holdingsToFetch: HoldingInput[];
+  if (Array.isArray(body.holdings)) {
+    holdingsToFetch = body.holdings as HoldingInput[];
+  } else if (Array.isArray(body.tickers)) {
+    holdingsToFetch = (body.tickers as string[]).map(t => ({ ticker: t, market: 'ASX' }));
+  } else {
     return NextResponse.json({ prices: {} });
   }
 
-  const results = await Promise.all(tickers.map(fetchPrice));
+  if (holdingsToFetch.length === 0) {
+    return NextResponse.json({ prices: {} });
+  }
+
+  const results = await Promise.all(holdingsToFetch.map(h => fetchPrice(h.ticker, h.market)));
   const prices: Record<string, PriceResult> = {};
   for (const r of results) {
     prices[r.ticker] = r;

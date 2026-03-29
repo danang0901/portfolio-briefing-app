@@ -18,7 +18,7 @@ function getUserClient(accessToken: string) {
   });
 }
 
-type Holding = { ticker: string; units: number };
+type Holding = { ticker: string; units: number; market?: 'ASX' | 'NASDAQ' | 'NYSE' };
 
 export type StockSignal = {
   ticker: string;
@@ -89,14 +89,15 @@ function portfolioHash(holdings: Holding[]): string {
 type YahooNewsItem = { title: string; publisher: string; providerPublishTime: number };
 type YahooSearchResponse = { news?: YahooNewsItem[] };
 
-async function fetchTickerNews(ticker: string): Promise<string> {
+async function fetchTickerNews(ticker: string, market = 'ASX'): Promise<string> {
   try {
     const etfQueries: Record<string, string> = {
       VGS: 'VGS Vanguard global equities ETF MSCI World',
       VAS: 'VAS Vanguard ASX 300 ETF Australia market',
       VAE: 'VAE Vanguard Asian emerging markets ETF',
     };
-    const query = etfQueries[ticker] ?? `${ticker}.AX`;
+    const suffix = market === 'ASX' ? '.AX' : '';
+    const query = etfQueries[ticker] ?? `${ticker}${suffix}`;
     const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&newsCount=8&quotesCount=0`;
 
     const res = await fetch(url, {
@@ -234,7 +235,7 @@ export async function POST(req: Request) {
           const fetches = Promise.all(
             holdings.map(async (h) => {
               emit({ type: 'progress', message: `Fetching ${h.ticker}…` });
-              const news = await fetchTickerNews(h.ticker);
+              const news = await fetchTickerNews(h.ticker, h.market ?? 'ASX');
               if (news) emit({ type: 'progress', message: `✓ ${h.ticker}` });
               return { ticker: h.ticker, news };
             })
@@ -255,14 +256,18 @@ export async function POST(req: Request) {
         emit({ type: 'progress', message: 'Generating signals…' });
 
         const holdingsText = holdings
-          .map(h => `  ${h.ticker}: ${h.units.toLocaleString()} units`)
+          .map(h => `  ${h.ticker} (${h.market ?? 'ASX'}): ${h.units.toLocaleString()} units`)
           .join('\n');
+
+        const marketsInPortfolio = [...new Set(holdings.map(h => h.market ?? 'ASX'))];
 
         const contextSection = newsContext
           ? `\nRecent news headlines:\n${newsContext}\n`
           : '\nNote: Live news unavailable. Base analysis on training data knowledge and note any limitations.\n';
 
-        const synthesisPrompt = `You are a senior ASX equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
+        const synthesisPrompt = `You are a senior equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
+
+The portfolio contains stocks from the following markets: ${marketsInPortfolio.join(', ')}.
 
 Portfolio:
 ${holdingsText}
@@ -275,10 +280,13 @@ ${contextSection}Signal definitions:
 Confidence: High = strong evidence, Medium = reasonable evidence, Low = limited evidence.
 Thesis status: intact = original reason still valid, developing = evolving closely, broken = case has changed.
 
-Context:
+Context per market:
+- ASX holdings: Australia economy, China demand (iron ore, copper), RBA rate decisions
+- NASDAQ/NYSE holdings: US economy, Fed policy, tech sector sentiment, USD strength
+- For ETFs (VGS, VAS, VAE): evaluate on index trajectory and macro tailwinds/headwinds
+
+General:
 - Long-term hold portfolio. Most signals should be HOLD unless there is a genuine reason to act.
-- For ASX miners: China demand (iron ore, copper) is the key variable.
-- For ETFs (VGS, VAS, VAE): evaluate on index trajectory and macro tailwinds/headwinds.
 - Be direct. If information is limited, say so in the catalyst field.
 
 Return ONLY valid JSON (no markdown, no code fences) matching this exact structure:

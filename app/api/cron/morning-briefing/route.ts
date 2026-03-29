@@ -76,13 +76,50 @@ export async function GET(req: Request) {
       });
 
       if (!res.ok) throw new Error(`Briefing API returned ${res.status}`);
-      const { briefing, error: briefingError } = await res.json();
-      if (briefingError) throw new Error(briefingError);
+      if (!res.body) throw new Error('No response body from briefing API');
+
+      // Consume NDJSON stream — the briefing API streams events, not a single JSON blob
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      const stocks: unknown[] = [];
+      let overview: unknown = null;
+      let generatedAt = '';
+      let newsSourced = false;
+      let streamError: string | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const event = JSON.parse(trimmed) as { type: string; [key: string]: unknown };
+            if (event.type === 'stock') stocks.push(event.data);
+            else if (event.type === 'overview') overview = event.data;
+            else if (event.type === 'done') {
+              generatedAt = event.generated_at as string;
+              newsSourced = event.news_sourced as boolean;
+            } else if (event.type === 'error') {
+              streamError = event.message as string;
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+
+      if (streamError) throw new Error(streamError);
+      if (!stocks.length || !overview) throw new Error('Incomplete briefing received from API');
+
+      const briefingData = { stocks, overview, generated_at: generatedAt, news_sourced: newsSourced };
 
       // Store briefing for this user
       const { error: insertErr } = await admin.from('briefings').insert({
         user_id:            row.user_id,
-        briefing_data:      briefing,
+        briefing_data:      briefingData,
         portfolio_snapshot: row.holdings,
       });
 
