@@ -1,13 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import { computeTAForTicker, formatTA } from '@/lib/technical-indicators';
+import { fetchASXAnnouncements } from '@/lib/asx-announcements';
+import { buildEconomicCalendar } from '@/lib/economic-calendar';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 90;
 
 const client = new Anthropic();
 
-// Use anon key + user JWT (same auth path the frontend uses — service role caused PGRST205)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
 const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
@@ -28,9 +30,11 @@ export type StockSignal = {
   sector: string;
   country: string;
   catalyst: string;
+  ta_context?: string;
   upcoming_catalyst: string;
   what_to_watch: string;
   risk_change: 'increased' | 'decreased' | 'unchanged';
+  citations?: string[];
 };
 
 export type BriefingOverview = {
@@ -40,6 +44,11 @@ export type BriefingOverview = {
   region_exposure: string;
   risk_profile: string;
   macro_note: string;
+  macro_context?: {
+    rba_next_decision?: string;
+    us_fed_watch?: string;
+    economic_calendar_7d?: string[];
+  };
 };
 
 export type BriefingData = {
@@ -53,7 +62,7 @@ type StreamEvent =
   | { type: 'progress'; message: string }
   | { type: 'stock'; data: StockSignal }
   | { type: 'overview'; data: BriefingOverview }
-  | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean }
+  | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number }
   | { type: 'error'; message: string };
 
 const OUTPUT_SCHEMA = `{
@@ -63,21 +72,28 @@ const OUTPUT_SCHEMA = `{
       "signal": "ADD" | "HOLD" | "TRIM" | "EXIT",
       "confidence": "High" | "Medium" | "Low",
       "thesis_status": "intact" | "developing" | "broken",
-      "sector": "e.g. Materials, Financials, Consumer Staples, ETF — Global Equities, Telecommunications",
-      "country": "e.g. Australia, United States, Global, Emerging Markets",
-      "catalyst": "2-3 sentences: what recently happened that affects this holding",
-      "upcoming_catalyst": "Next known event to watch (earnings date, AGM, macro data release)",
-      "what_to_watch": "The single most important risk or trigger to monitor right now",
-      "risk_change": "increased" | "decreased" | "unchanged"
+      "sector": "e.g. Materials, Financials, Consumer Staples, ETF — Global Equities",
+      "country": "e.g. Australia, United States, Global",
+      "catalyst": "2-3 sentences on recent events driving the signal. Cite sources inline: [Source: Yahoo Finance 2026-03-29]",
+      "ta_context": "1 sentence: RSI level with label, MACD direction, DMA position. Example: 'RSI 58 (neutral). MACD bullish. +4.2% vs 200DMA.' Omit field entirely if TA data unavailable.",
+      "upcoming_catalyst": "Next known event to watch",
+      "what_to_watch": "Single most important risk or trigger right now",
+      "risk_change": "increased" | "decreased" | "unchanged",
+      "citations": ["Source: Yahoo Finance [date] — [headline]", "Source: ASX Announcement [date] — [headline]"]
     }
   ],
   "overview": {
-    "watch_list": ["3-5 specific items the trader should pay attention to this week"],
+    "watch_list": ["3-5 specific items to watch this week"],
     "priority_actions": ["One line per ADD/TRIM/EXIT signal only — empty array if all HOLD"],
-    "sector_breakdown": "1-2 sentences on sector concentration and any imbalances",
+    "sector_breakdown": "1-2 sentences on sector concentration and imbalances",
     "region_exposure": "1-2 sentences on geographic exposure",
-    "risk_profile": "1-2 sentences on overall portfolio risk and diversification quality",
-    "macro_note": "1-2 sentences on the key macro factor most relevant to this specific portfolio right now"
+    "risk_profile": "1-2 sentences on overall portfolio risk",
+    "macro_note": "2-3 sentences: connect the economic calendar events to specific holdings in this portfolio",
+    "macro_context": {
+      "rba_next_decision": "Date + expected outcome for AU bank/rate-sensitive holdings",
+      "us_fed_watch": "Current Fed stance in 1 sentence",
+      "economic_calendar_7d": ["Upcoming events from the calendar — include dates"]
+    }
   }
 }`;
 
@@ -112,7 +128,10 @@ async function fetchTickerNews(ticker: string, market = 'ASX'): Promise<string> 
 
     return items.slice(0, 8).map(item => {
       const date = new Date(item.providerPublishTime * 1000)
-        .toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Australia/Sydney' });
+        .toLocaleDateString('en-AU', {
+          day: 'numeric', month: 'short', year: 'numeric',
+          timeZone: 'Australia/Sydney',
+        });
       return `[${date}] ${item.title} (${item.publisher})`;
     }).join('\n');
   } catch {
@@ -160,8 +179,6 @@ export async function POST(req: Request) {
 
       if (cacheError && cacheError.code !== 'PGRST116') {
         console.error('[briefing] Cache query error:', cacheError.code, cacheError.message);
-      } else {
-        console.log('[briefing] Cache query ok, found:', !!cached);
       }
 
       if (cached) {
@@ -207,7 +224,6 @@ export async function POST(req: Request) {
       }
     } catch (e) {
       console.error('[briefing] Cache check exception:', String(e));
-      // Supabase unavailable — proceed without cache/rate limiting
     }
   }
 
@@ -221,73 +237,83 @@ export async function POST(req: Request) {
       }
 
       try {
-        // ── Phase 1: Fetch news (parallel, 15s hard cap) ──────────────────────
-        emit({ type: 'progress', message: 'Fetching market news…' });
+        emit({ type: 'progress', message: 'Gathering market intelligence…' });
 
-        let newsContext = '';
-        let newsSourced = false;
+        // ── Phase 1a: Per-ticker parallel data gathering ──────────────────────
+        const perTickerResults = await Promise.all(
+          holdings.map(async (h) => {
+            const market = h.market ?? 'ASX';
+            emit({ type: 'progress', message: `Fetching ${h.ticker}…` });
 
-        try {
-          const timeout = new Promise<{ ticker: string; news: string }[]>((resolve) =>
-            setTimeout(() => resolve(holdings.map(h => ({ ticker: h.ticker, news: '' }))), 15000)
-          );
+            const [news, ta, announcements] = await Promise.all([
+              fetchTickerNews(h.ticker, market),
+              computeTAForTicker(h.ticker, market),
+              market === 'ASX' ? fetchASXAnnouncements(h.ticker) : Promise.resolve([]),
+            ]);
 
-          const fetches = Promise.all(
-            holdings.map(async (h) => {
-              emit({ type: 'progress', message: `Fetching ${h.ticker}…` });
-              const news = await fetchTickerNews(h.ticker, h.market ?? 'ASX');
-              if (news) emit({ type: 'progress', message: `✓ ${h.ticker}` });
-              return { ticker: h.ticker, news };
-            })
-          );
+            if (news || ta.currentPrice !== null) {
+              emit({ type: 'progress', message: `✓ ${h.ticker}` });
+            }
+            return { ticker: h.ticker, market, units: h.units, news, ta, announcements };
+          })
+        );
 
-          const newsResults = await Promise.race([fetches, timeout]);
-          const withNews = newsResults.filter(r => r.news.length > 0);
-          if (withNews.length > 0) {
-            newsContext = withNews.map(r => `${r.ticker}:\n${r.news}`).join('\n\n');
-            newsSourced = true;
-          }
-        } catch {
-          newsContext = '';
-          newsSourced = false;
-        }
+        // ── Phase 1b: Portfolio-wide data (economic calendar) ────────────────
+        emit({ type: 'progress', message: 'Fetching macro context…' });
+        const economicCalendar = buildEconomicCalendar(14);
 
-        // ── Phase 2: Streaming synthesis with Sonnet ──────────────────────────
+        const newsSourced = perTickerResults.some(r => r.news.length > 0);
+        const marketsInPortfolio = [...new Set(holdings.map(h => h.market ?? 'ASX'))];
+
+        // ── Phase 2: Sonnet synthesis ─────────────────────────────────────────
         emit({ type: 'progress', message: 'Generating signals…' });
 
         const holdingsText = holdings
           .map(h => `  ${h.ticker} (${h.market ?? 'ASX'}): ${h.units.toLocaleString()} units`)
           .join('\n');
 
-        const marketsInPortfolio = [...new Set(holdings.map(h => h.market ?? 'ASX'))];
+        const perTickerContext = perTickerResults.map(r => {
+          const taStr = formatTA(r.ta);
+          const lines: string[] = [`## ${r.ticker} (${r.market})`];
+          lines.push(r.news ? `News:\n${r.news}` : 'News: No recent news available.');
+          lines.push(taStr ? `Technical Analysis: ${taStr}` : 'Technical Analysis: Insufficient data.');
+          if (r.announcements.length > 0) {
+            lines.push(`Recent ASX Announcements:\n${r.announcements.join('\n')}`);
+          }
+          return lines.join('\n');
+        }).join('\n\n');
 
-        const contextSection = newsContext
-          ? `\nRecent news headlines:\n${newsContext}\n`
-          : '\nNote: Live news unavailable. Base analysis on training data knowledge and note any limitations.\n';
+        const synthesisPrompt = `You are a senior portfolio manager with 25 years of experience across Australian and US equity markets. You have managed funds through the GFC, COVID crash, and the 2022 rate shock. You think in terms of sector rotation, macro regime, and risk-adjusted returns.
 
-        const synthesisPrompt = `You are a senior equity analyst generating a morning briefing for a long-term portfolio investor. Today is ${today}.
-
-The portfolio contains stocks from the following markets: ${marketsInPortfolio.join(', ')}.
+Today is ${today}. Markets in this portfolio: ${marketsInPortfolio.join(', ')}.
 
 Portfolio:
 ${holdingsText}
-${contextSection}Signal definitions:
-- ADD: Strengthen this position — thesis is building or entry point is attractive
-- HOLD: Maintain — thesis intact, no action needed today
-- TRIM: Reduce — thesis weakening, position oversized, or risk has increased meaningfully
-- EXIT: Close — thesis is broken or the investment case has fundamentally changed
 
-Confidence: High = strong evidence, Medium = reasonable evidence, Low = limited evidence.
-Thesis status: intact = original reason still valid, developing = evolving closely, broken = case has changed.
+─────────────────────────────────────────────
+PER-HOLDING DATA
+─────────────────────────────────────────────
+${perTickerContext}
 
-Context per market:
-- ASX holdings: Australia economy, China demand (iron ore, copper), RBA rate decisions
-- NASDAQ/NYSE holdings: US economy, Fed policy, tech sector sentiment, USD strength
-- For ETFs (VGS, VAS, VAE): evaluate on index trajectory and macro tailwinds/headwinds
+─────────────────────────────────────────────
+ECONOMIC CALENDAR (next 14 days)
+─────────────────────────────────────────────
+${economicCalendar}
 
-General:
-- Long-term hold portfolio. Most signals should be HOLD unless there is a genuine reason to act.
-- Be direct. If information is limited, say so in the catalyst field.
+─────────────────────────────────────────────
+YOUR STANDARDS
+─────────────────────────────────────────────
+1. Cite every claim in "catalyst" inline: [Source: Yahoo Finance 2026-03-29] or [Source: ASX Announcement 28 Mar].
+2. "ta_context": 1 sentence — RSI level (with overbought/neutral/oversold), MACD direction, DMA position. Omit entirely if TA fields are null. Do NOT fabricate TA values.
+3. "macro_note": connect specific calendar events to specific holdings (e.g. "RBA hold on 1 Apr is near-term support for CBA"). Generic macro commentary is not useful.
+4. Signals: ADD/HOLD/TRIM/EXIT only. Long-term hold portfolio — default to HOLD unless there is clear evidence to act.
+5. "citations" array: 1-3 sources per stock, most important first.
+
+Signal definitions:
+- ADD: Strengthen position — thesis building or entry attractive
+- HOLD: Maintain — thesis intact, no action
+- TRIM: Reduce — thesis weakening, risk increased, or position oversized
+- EXIT: Close — thesis broken or investment case fundamentally changed
 
 Return ONLY valid JSON (no markdown, no code fences) matching this exact structure:
 ${OUTPUT_SCHEMA}`;
@@ -302,7 +328,7 @@ ${OUTPUT_SCHEMA}`;
 
         const synthStream = client.messages.stream({
           model: 'claude-sonnet-4-6',
-          max_tokens: 4096,
+          max_tokens: 6000,
           messages: [{ role: 'user', content: synthesisPrompt }],
         });
 
@@ -341,7 +367,7 @@ ${OUTPUT_SCHEMA}`;
                       emittedTickers.add(stock.ticker);
                     }
                   } catch {
-                    // Partial — caught by fallback below
+                    // partial — caught by fallback below
                   }
                   objectStart = -1;
                 }
@@ -362,14 +388,22 @@ ${OUTPUT_SCHEMA}`;
 
         const generatedAt = new Date().toISOString();
         emit({ type: 'overview', data: result.overview });
-        emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced, from_cache: false });
 
-        // ── Store in Supabase so next request hits cache ───────────────────────
+        // ── Store briefing + log signals ──────────────────────────────────────
+        let signalCount = 0;
         if (userId && accessToken && isSupabaseConfigured) {
+          const userClient = getUserClient(accessToken);
+
+          // Store briefing
           try {
-            const { error: insertError } = await getUserClient(accessToken).from('briefings').insert({
+            const { error: insertError } = await userClient.from('briefings').insert({
               user_id: userId,
-              briefing_data: { stocks: result.stocks, overview: result.overview, generated_at: generatedAt, news_sourced: newsSourced } satisfies BriefingData,
+              briefing_data: {
+                stocks: result.stocks,
+                overview: result.overview,
+                generated_at: generatedAt,
+                news_sourced: newsSourced,
+              } satisfies BriefingData,
               portfolio_snapshot: holdings,
             });
             if (insertError) {
@@ -380,7 +414,34 @@ ${OUTPUT_SCHEMA}`;
           } catch (e) {
             console.error('[briefing] Insert exception:', String(e));
           }
+
+          // Log signals for accuracy tracker
+          try {
+            const signalRows = result.stocks
+              .filter(s => s.signal && s.ticker)
+              .map(s => ({
+                user_id: userId,
+                ticker: s.ticker,
+                market: holdings.find(h => h.ticker === s.ticker)?.market ?? 'ASX',
+                signal: s.signal,
+                confidence: s.confidence,
+                price_at_signal: perTickerResults.find(r => r.ticker === s.ticker)?.ta.currentPrice ?? null,
+              }));
+
+            if (signalRows.length > 0) {
+              const { error: logError } = await userClient.from('signal_logs').insert(signalRows);
+              if (logError) {
+                console.error('[briefing] Signal log error:', logError.code, logError.message);
+              } else {
+                signalCount = signalRows.length;
+              }
+            }
+          } catch (e) {
+            console.error('[briefing] Signal log exception:', String(e));
+          }
         }
+
+        emit({ type: 'done', generated_at: generatedAt, news_sourced: newsSourced, from_cache: false, signal_count: signalCount });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[briefing] Stream error:', message);

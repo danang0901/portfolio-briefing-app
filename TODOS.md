@@ -1,47 +1,188 @@
-# TODOS
+# TODOS — Portfolio Briefing
 
-## Monetization
+> Synthesised from `TODOS.md` + `to_do.md` on 2026-03-30.
+> `to_do.md` is now superseded by this file.
 
-**Priority:** P1 — implement after external user validation
+---
+
+## Priority Ranking (Urgency × Impact ÷ Effort)
+
+| Rank | Item | Score |
+|------|------|-------|
+| #1 | Post sample briefing to r/AusFinance | 10 |
+| #2 | Email delivery (Resend/SendGrid) | 8 |
+| #3 | Privacy policy + email opt-in | 7 |
+| #4 | Full intelligence stack (TA + ASX feed + economic calendar) | 7 |
+| #5 | Signal accuracy tracker | 6 |
+| #6 | Sharper landing page | 5 |
+| #7 | Stripe integration | 5 |
+| #8 | 30-day briefing history | 4 |
+| #9 | Usage tracking in Supabase | 4 |
+| #10 | Paywall enforcement | 3 |
+| #11 | Upgrade prompt | 3 |
+| #12 | Mobile PWA | 2 |
+| #13 | Multi-portfolio / Watchlist / LSE | 1 |
+
+---
+
+## P0 — Do Before Any New Feature
+
+- [ ] **Post sample briefing to r/AusFinance** — distribution + signal quality stress test in one action
+  **Why:** 350k members. "Does this BHP/CBA/NDQ briefing look accurate to you?" generates real users AND validates signal quality. The highest-leverage action available — zero dev required.
+  **How:** Post a real briefing output (not a product announcement). Ask the community to challenge the signals specifically.
+  **Effort:** 1–2 human hours, zero dev.
+
+---
+
+## P1 — Pre-Monetization (ship before Stripe)
+
+- [x] **Full intelligence stack** — TA signals + ASX announcements + economic calendar
+  **Completed:** 2026-03-30
+  **What shipped:**
+  - `lib/technical-indicators.ts` — RSI(14), MACD, 50DMA/200DMA computed server-side from Yahoo Finance OHLCV
+  - `lib/asx-announcements.ts` — last 5 ASX company announcements per ASX ticker
+  - `lib/economic-calendar.ts` — hardcoded RBA/FOMC/AU economic release dates (refresh quarterly)
+  - Updated `app/api/briefing/route.ts` — 25-year fund manager synthesis persona, citations required, TA injected into per-ticker context
+  - **Cost delta:** $0.07 → ~$0.08–0.09/briefing (TA is zero cost, calendar adds ~$0.001 via Haiku)
+  - **Note:** Reddit/r/AusFinance sentiment was removed — violates Reddit Data API terms (no AI inference use). Replaced by Stocktwits (see P1 below).
+
+- [x] **Signal accuracy tracker** — log each signal with timestamp + price; schema ready for benchmark accuracy computation
+  **Completed:** 2026-03-30
+  **What shipped:**
+  - `supabase/migrations/002_signal_logs.sql` — `signal_logs` table (user_id, ticker, market, signal, confidence, price_at_signal)
+  - Briefing route inserts signal_log rows on each new briefing generation (uses OHLCV current price)
+  - UI shows "X signals tracked" counter in briefing header
+  - **Accuracy computation** (benchmark-adjusted vs ASX 200 / S&P 500) is deferred until ≥20 signals exist — add as a follow-up to this item
+  - Run migration: `supabase migration up` or apply `supabase/migrations/002_signal_logs.sql` manually
+
+- [x] **Privacy policy + email opt-in consent**
+  **Completed:** 2026-03-30
+  **What shipped:**
+  - `app/privacy/page.tsx` — full privacy policy covering data collection, third parties, retention, contact
+  - Sign-in button now shows "By continuing you agree to our Privacy Policy" link
+  - Footer link to `/privacy` on main page
+
+- [x] **Sharper landing page** — richer value prop for unauthenticated visitors
+  **Completed:** 2026-03-30
+  **What shipped:**
+  - Hero section (unauthenticated): "Stop spending 20 minutes on Reddit every morning."
+  - Static sample BHP card showing what a real briefing looks like (quality signal, TA context, citation)
+  - CTA: "Try free — sign in with Google, no credit card"
+  - Layout metadata description updated
+
+- [ ] **Stocktwits sentiment layer** — replace Reddit with Stocktwits public API (`api.stocktwits.com/api/2/streams/symbol/{ticker}.json`)
+  **Why:** Reddit Data API prohibits AI inference use. Stocktwits is free, no auth required for public streams, and returns explicit Bullish/Bearish sentiment tags. Better US coverage for NASDAQ/NYSE holdings.
+  **What to build:** `lib/stocktwits-sentiment.ts` — fetch last 30 messages per ticker, count Bullish/Bearish tags, return 1-line sentiment summary (e.g. "BHP: 12 bullish / 3 bearish (last 30 posts)"). Inject into briefing route alongside TA.
+  **Effort:** ~15 mins CC+gstack | 2 hours human.
+
+- [ ] **Email delivery** — send morning briefing to opted-in users via Resend/SendGrid
+  **Why:** Daily habit requires the product to come to the user (inbox = phone). A subscription product with no delivery mechanism is just a website.
+  **Context:** Cron already runs at 09:30 AEST, briefing pre-generated. Add SMTP + HTML email template.
+  **Production requirements:** Responsive HTML email (Gmail/Outlook/Apple Mail tested), one-click unsubscribe (Australian Spam Act), SPF/DKIM DNS records, bounce handling.
+  **Effort:** ~2–3 hours CC+gstack | 2–3 days human.
+
+---
+
+## P2 — Monetization
+
+Implement after pre-monetization checklist (especially email + accuracy tracker) is complete and external users are validating the product.
+
+### Tier Definition
+
+| Tier | Price | Limits |
+|------|-------|--------|
+| Free | $0 | Up to 5 holdings, 1 briefing/day (cached), no history |
+| Pro  | $9 AUD/month | Unlimited holdings, daily briefing, 30-day signal history, email delivery |
+
+### Competitor Landscape
+
+| Product | What it does | Pricing | What it lacks |
+|---------|-------------|---------|---------------|
+| **Sharesight** | Portfolio performance, CGT reports, dividend tracking | Free (10 holdings), $17–53 AUD/mo | No AI briefing, no actionable signals |
+| **Simply Wall St** | Visual "snowflake" analysis per stock | Free (5), ~$15 USD/mo | Static analysis, not a daily briefing |
+| **Stockopedia** | Stock screening with quality/value/momentum scores | ~$280–420 AUD/yr | Not portfolio-personalised, no narrative |
+| **Morningstar** | Deep analyst reports, star ratings | ~$35 AUD/mo | Long-form, not a 2-minute daily check |
+| **Market Index** | Free ASX data, watchlist, news | Free | No AI, no portfolio briefing |
+| **Perplexity/ChatGPT** | Manual "what happened to BHP today" queries | $20/mo | Not portfolio-integrated, no daily habit |
+
+**The gap nobody fills today:**
+- AI-generated daily briefing tailored to *your specific holdings*
+- Actionable signals (ADD/HOLD/TRIM/EXIT) with TA context and citations
+- Works for mixed ASX + US portfolios
+- Under $10/month
+
+**Closest threat:** Sharesight or Simply Wall St adding an AI briefing feature.
+**Moat:** (1) first-mover with ASX long-term holders, (2) daily briefing habit, (3) verified signal accuracy track record (build this now).
+
+### Monetization Tasks
 
 - [ ] **Stripe integration** — subscription + billing (Free/Pro tiers)
   **Why:** No monetization without payment infrastructure.
-  **Context:** Free tier: 5 holdings, 1 briefing/day. Pro: $9 AUD/month, unlimited holdings, daily briefing, 30-day history. See `to_do.md` for full competitor analysis and pricing rationale.
+  **Effort:** ~30 mins CC+gstack | 2–3 days human.
 
 - [ ] **Usage tracking in Supabase** — briefings/day count, holdings count per user
-  **Why:** Needed to enforce free tier limits before Stripe integration.
-  **Context:** Add `briefing_count` and `holdings_count` to user profile or compute from existing `briefings` table.
+  **Why:** Needed to enforce free tier limits.
+  **Context:** Add `briefing_count` and `holdings_count` to user profile or compute from `briefings` table.
+  **Effort:** ~20 mins CC+gstack | 1 day human.
 
 - [ ] **Paywall enforcement in briefing API** — check tier before generating
   **Why:** Free users capped at 5 holdings and 1 briefing/day.
-  **Depends on:** Stripe integration + usage tracking.
+  **Depends on:** Stripe + usage tracking.
 
 - [ ] **Upgrade prompt** — shown when free user hits limit
-  **Why:** Conversion path from free to paid.
   **Context:** "You have 5 holdings — upgrade to Pro to add more."
-  **Depends on:** Stripe integration + paywall enforcement.
+  **Depends on:** Paywall enforcement.
 
-## Infrastructure
+- [ ] **30-day briefing history with signal outcome overlay** — show past signals vs actual price moves
+  **Why:** "March 1 — ADD on NDQ at $35.20. Today: $38.90 (+10.8%)" is in-app proof of value. Pro tier differentiator.
+  **Depends on:** Signal accuracy tracker running for ≥30 days.
+  **Effort:** ~25–30 mins CC+gstack | 3–5 days human.
 
-**Priority:** P2
+---
 
-- [ ] **Fix cron briefing storage** — ~~cron called `res.json()` on streaming NDJSON~~
-  **Status:** Fixed in this PR. Leaving here as reference until verified in production.
+## P3 — Future Features
 
-## Future Features
+- [ ] **Mobile PWA / push notifications** — home screen install + push at 09:30 AEST
+  **When:** After email delivery is validating the daily habit for ≥20 users.
+  **Effort:** ~2 hours CC+gstack | 2–3 weeks human.
 
-**Priority:** P3
+- [ ] **Signal accuracy computation** — benchmark-adjusted accuracy score vs ASX 200 / S&P 500
+  **When:** After signal_logs table has ≥20 signals (30+ days of usage).
+  **Context:** Use `adjclose` prices (adjusted for dividends/splits). Display "ADD signals beat ASX 200 benchmark X% of the time over 90 days" on landing page.
+  **Effort:** ~45 mins CC+gstack | 1 week human.
 
-- [ ] **Mobile PWA / push notifications** — morning briefing delivery before market open
-- [ ] **Email delivery** — cron already runs, just needs SMTP integration
 - [ ] **Portfolio performance tracking over time** — Sharesight's core feature
+
 - [ ] **Multi-portfolio support** — personal vs SMSF
+
 - [ ] **Watchlist** — stocks not yet owned but monitoring
-- [ ] **LSE support** — extend `market` field in Holding type with `'LSE'`
+
+- [ ] **LSE support** — extend `market` field with `'LSE'`
+
+- [ ] **Annual billing** — ~$79 AUD/year (~30% discount). Add after monthly churn is measurable.
+
+---
+
+## Environment Variables Required
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `ANTHROPIC_API_KEY` | Yes | AI briefing generation |
+| `NEXT_PUBLIC_SUPABASE_URL` | Optional | Auth + cloud sync |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Optional | Auth + cloud sync |
+| `SUPABASE_SERVICE_ROLE_KEY` | Optional (cron only) | Morning cron briefings |
+| `CRON_SECRET` | Optional (cron only) | Cron auth |
+| `STOCKTWITS_ACCESS_TOKEN` | Optional | Stocktwits sentiment layer (no auth needed for public API) |
+
+---
 
 ## Completed
 
-- [x] **Multi-market support (ASX + NASDAQ/NYSE)** — market field on every holding, market-aware prices/charts/briefing (2026-03-29)
-- [x] **Inline portfolio editing** — click-to-edit ticker/exchange/units cells (2026-03-29)
-- [x] **Unit tests** — 20 tests covering yahoo-symbol routing, validators, market coercion (2026-03-29)
-- [x] **Competitor analysis + pricing model** — in `to_do.md` (2026-03-29)
+- [x] Multi-market support (ASX + NASDAQ/NYSE) — 2026-03-29
+- [x] Inline portfolio editing — 2026-03-29
+- [x] Unit tests (20 tests) — 2026-03-29
+- [x] Competitor analysis + pricing model — 2026-03-29
+- [x] Privacy policy + email opt-in — 2026-03-30
+- [x] Full intelligence stack (TA + ASX feed + calendar) — 2026-03-30
+- [x] Signal accuracy tracker (schema + logging) — 2026-03-30
+- [x] Sharper landing page — 2026-03-30

@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Portfolio Briefing',
-  description: 'AI-powered daily briefings for your ASX portfolio.',
+  description: 'Stop spending 20 minutes on Reddit every morning. AI-powered fund manager briefings — ADD/HOLD/TRIM/EXIT signals with technical analysis and live news for your ASX and US portfolio.',
 };
 
 export const viewport: Viewport = {

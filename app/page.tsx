@@ -130,6 +130,7 @@ function TradingViewChart({ ticker, market = 'ASX' }: { ticker: string; market?:
 
 function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price?: { label: string; direction: 'up' | 'down' | 'flat' | null }; market?: string }) {
   const [chartOpen, setChartOpen] = useState(false);
+  const [citationsOpen, setCitationsOpen] = useState(false);
 
   return (
     <div className="rounded-xl p-5 mb-3"
@@ -190,6 +191,14 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
         </span>
       </div>
 
+      {/* Technical analysis context */}
+      {stock.ta_context && (
+        <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
+          style={{ background: '#0f172a', color: '#7dd3fc', border: '1px solid #1e3a5f' }}>
+          {stock.ta_context}
+        </div>
+      )}
+
       {/* Catalyst */}
       <p className="text-sm leading-relaxed mb-3" style={{ color: '#d1d5db' }}>
         {stock.catalyst}
@@ -213,10 +222,30 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
         </div>
       )}
 
+      {/* Citations */}
+      {stock.citations && stock.citations.length > 0 && (
+        <div className="mt-2">
+          <button
+            onClick={() => setCitationsOpen(o => !o)}
+            className="text-xs flex items-center gap-1 mb-1"
+            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+            <span>{citationsOpen ? '▲' : '▼'}</span>
+            <span>{citationsOpen ? 'Hide sources' : `Sources (${stock.citations.length})`}</span>
+          </button>
+          {citationsOpen && (
+            <ul className="space-y-0.5 pl-3" style={{ borderLeft: '2px solid var(--border)' }}>
+              {stock.citations.map((c, i) => (
+                <li key={i} className="text-xs" style={{ color: '#6b7280' }}>{c}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {/* TradingView chart toggle */}
       <button
         onClick={() => setChartOpen(o => !o)}
-        className="text-xs flex items-center gap-1.5 mt-1"
+        className="text-xs flex items-center gap-1.5 mt-2"
         style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
         <span>{chartOpen ? '▲' : '▼'}</span>
         <span>{chartOpen ? 'Hide chart' : 'View chart'}</span>
@@ -244,6 +273,7 @@ export default function Home() {
   const [accessToken, setAccessToken]   = useState('');
   const [authLoading, setAuthLoading]   = useState(true);
   const [countdown, setCountdown]       = useState('');
+  const [signalCount, setSignalCount]   = useState<number | null>(null);
 
   const portfolioRef = useRef<Holding[]>(DEFAULT_PORTFOLIO);
   const userRef      = useRef<User | null>(null);
@@ -449,7 +479,7 @@ export default function Home() {
               | { type: 'progress'; message: string }
               | { type: 'stock'; data: StockSignal }
               | { type: 'overview'; data: BriefingOverview }
-              | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean }
+              | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number }
               | { type: 'error'; message: string };
 
             if (event.type === 'progress') {
@@ -463,6 +493,7 @@ export default function Home() {
               generatedAt = event.generated_at;
               newsSourced = event.news_sourced;
               fromCache = event.from_cache;
+              if (event.signal_count != null) setSignalCount(event.signal_count);
             } else if (event.type === 'error') {
               throw new Error(event.message);
             }
@@ -652,20 +683,76 @@ export default function Home() {
         {tab === 'briefing' && (
           <div className="animate-fade-in">
 
-            {/* Generate / regenerate button — or sign-in gate */}
+            {/* Generate / regenerate button — or sign-in gate with hero */}
             {isSupabaseConfigured && !user && !authLoading ? (
-              <button
-                onClick={signIn}
-                className="w-full py-3 rounded-xl text-sm font-semibold mb-2 transition-all flex items-center justify-center gap-2"
-                style={{ background: 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
-                <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
-                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                </svg>
-                Sign in with Google to generate briefing
-              </button>
+              <div className="animate-fade-in">
+                {/* Hero */}
+                <div className="text-center mb-6">
+                  <p className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                    Stop spending 20 minutes on Reddit every morning.
+                  </p>
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    AI-powered fund manager briefings — ADD/HOLD/TRIM/EXIT signals with TA and live news, delivered daily.
+                  </p>
+                </div>
+
+                {/* Static sample card */}
+                <div className="rounded-xl p-5 mb-5"
+                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', opacity: 0.85 }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>BHP</span>
+                      <span className="text-xs font-mono px-1.5 py-0.5 rounded"
+                        style={{ background: '#052e16', color: '#4ade80' }}>▲ $44.32</span>
+                    </div>
+                    <span className="text-xs px-3 py-1 rounded-full font-bold tracking-wider"
+                      style={SIGNAL_STYLE.HOLD}>HOLD</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+                      style={{ background: '#1e3a5f', color: '#93c5fd' }}>Materials</span>
+                    <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+                      style={{ background: '#14352a', color: '#6ee7b7' }}>AU</span>
+                    <span className="text-xs px-2 py-0.5 rounded-md"
+                      style={{ background: '#1c1917', color: '#a8a29e' }}>
+                      <span className="font-mono" style={{ color: '#fb923c' }}>●●○</span>{' '}Medium
+                      <span style={{ color: '#44403c', margin: '0 5px' }}>|</span>Risk <span style={{ color: '#a8a29e' }}>–</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Thesis:</span>
+                    <span className="text-xs font-semibold" style={{ color: '#fb923c' }}>developing</span>
+                  </div>
+                  <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
+                    style={{ background: '#0f172a', color: '#7dd3fc', border: '1px solid #1e3a5f' }}>
+                    RSI 52 · MACD bullish · +3.1% vs 200DMA
+                  </div>
+                  <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>
+                    Iron ore demand outlook softening on China construction data. Copper division provides partial offset — watch for Q2 production guidance revision at the upcoming results.
+                  </p>
+                  <div className="mt-3 text-xs italic" style={{ color: 'var(--text-muted)' }}>
+                    — Sample briefing card. Sign in to generate yours.
+                  </div>
+                </div>
+
+                {/* Sign-in CTA */}
+                <button
+                  onClick={signIn}
+                  className="w-full py-3 rounded-xl text-sm font-semibold mb-2 transition-all flex items-center justify-center gap-2"
+                  style={{ background: 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
+                  <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                  </svg>
+                  Try free — sign in with Google, no credit card
+                </button>
+                <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>
+                  By continuing you agree to our{' '}
+                  <a href="/privacy" style={{ color: '#6b7280', textDecoration: 'underline' }}>Privacy Policy</a>
+                </p>
+              </div>
             ) : countdown ? (
               <div className="mb-2">
                 <button
@@ -740,6 +827,12 @@ export default function Home() {
                       </span>
                     )}
                   </p>
+                  {signalCount != null && signalCount > 0 && (
+                    <span className="text-xs px-2 py-0.5 rounded"
+                      style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c' }}>
+                      {signalCount} signal{signalCount !== 1 ? 's' : ''} tracked
+                    </span>
+                  )}
                 </div>
 
                 {/* ── Priority Actions (only shown when non-empty) ── */}
