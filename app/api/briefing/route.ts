@@ -98,7 +98,10 @@ const OUTPUT_SCHEMA = `{
 }`;
 
 function portfolioHash(holdings: Holding[]): string {
-  const sorted = [...holdings].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  // Normalize key order before hashing so Supabase round-trips don't change the hash
+  const sorted = [...holdings]
+    .sort((a, b) => a.ticker.localeCompare(b.ticker))
+    .map(h => ({ ticker: h.ticker, units: h.units, market: h.market ?? 'ASX' }));
   return createHash('sha256').update(JSON.stringify(sorted)).digest('hex').slice(0, 8);
 }
 
@@ -213,14 +216,7 @@ export async function POST(req: Request) {
           return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
         }
 
-        console.log('[briefing] Portfolio changed — blocking regeneration');
-        return new Response(
-          JSON.stringify({
-            type: 'error',
-            message: 'Daily limit reached (1/day). Your briefing refreshes automatically each morning.',
-          }) + '\n',
-          { status: 429, headers: { 'Content-Type': 'application/x-ndjson' } },
-        );
+        // Portfolio changed since last briefing — fall through to regenerate
       }
     } catch (e) {
       console.error('[briefing] Cache check exception:', String(e));
