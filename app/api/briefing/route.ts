@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { computeTAForTicker, formatTA } from '@/lib/technical-indicators';
 import { fetchASXAnnouncements } from '@/lib/asx-announcements';
+import { fetchStocktwitsSentiment } from '@/lib/stocktwits-sentiment';
 import { buildEconomicCalendar } from '@/lib/economic-calendar';
 
 export const dynamic = 'force-dynamic';
@@ -247,10 +248,15 @@ export async function POST(req: Request) {
               market === 'ASX' ? fetchASXAnnouncements(h.ticker) : Promise.resolve([]),
             ]);
 
+            // Sentiment requires TA (RSI/MACD) — sequential within ticker, tickers still parallel
+            const sentimentFlag = market !== 'ASX'
+              ? await fetchStocktwitsSentiment(h.ticker, ta)
+              : '';
+
             if (news || ta.currentPrice !== null) {
               emit({ type: 'progress', message: `✓ ${h.ticker}` });
             }
-            return { ticker: h.ticker, market, units: h.units, news, ta, announcements };
+            return { ticker: h.ticker, market, units: h.units, news, ta, announcements, sentimentFlag };
           })
         );
 
@@ -275,6 +281,9 @@ export async function POST(req: Request) {
           lines.push(taStr ? `Technical Analysis: ${taStr}` : 'Technical Analysis: Insufficient data.');
           if (r.announcements.length > 0) {
             lines.push(`Recent ASX Announcements:\n${r.announcements.join('\n')}`);
+          }
+          if (r.sentimentFlag) {
+            lines.push(`Community Sentiment: ${r.sentimentFlag}`);
           }
           return lines.join('\n');
         }).join('\n\n');
@@ -304,6 +313,7 @@ YOUR STANDARDS
 3. "macro_note": connect specific calendar events to specific holdings (e.g. "RBA hold on 1 Apr is near-term support for CBA"). Generic macro commentary is not useful.
 4. Signals: ADD/HOLD/TRIM/EXIT only. Long-term hold portfolio — default to HOLD unless there is clear evidence to act.
 5. "citations" array: 1-3 sources per stock, most important first.
+6. If "Community Sentiment" is present in a ticker's data, include the flag verbatim as the final sentence of that ticker's "catalyst" field.
 
 Signal definitions:
 - ADD: Strengthen position — thesis building or entry attractive
