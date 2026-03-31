@@ -26,7 +26,7 @@ export default function PrivacyPage() {
             Your portfolio holdings (tickers, units, exchange) are stored in Supabase against your user ID. If you use the app without signing in, holdings are stored only in your browser's localStorage and never sent to our servers.
           </p>
           <p style={{ fontSize: '14px', lineHeight: '1.7', color: '#9ca3af', marginTop: '10px' }}>
-            Generated briefings, including ADD/HOLD/TRIM/EXIT signals, are stored in Supabase for 30 days to power the 24-hour cache and signal accuracy tracking. After 30 days, briefings may be automatically deleted.
+            Generated briefings, including AI perspective signals (Accumulate Thesis / Monitor / Review Exposure / Thesis Broken), are stored in Supabase for 30 days to power the 24-hour cache and signal accuracy tracking. After 30 days, briefings may be automatically deleted.
           </p>
           <p style={{ fontSize: '14px', lineHeight: '1.7', color: '#9ca3af', marginTop: '10px' }}>
             Signal logs (ticker, signal, price at generation time) are stored to compute historical accuracy statistics. These logs are associated with your user ID and are only visible to you.

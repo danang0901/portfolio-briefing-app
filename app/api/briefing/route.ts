@@ -39,6 +39,7 @@ export type StockSignal = {
 };
 
 export type BriefingOverview = {
+  executive_summary: string;
   watch_list: string[];
   priority_actions: string[];
   sector_breakdown: string;
@@ -75,21 +76,22 @@ const OUTPUT_SCHEMA = `{
       "thesis_status": "intact" | "developing" | "broken",
       "sector": "e.g. Materials, Financials, Consumer Staples, ETF — Global Equities",
       "country": "e.g. Australia, United States, Global",
-      "catalyst": "2-3 sentences on recent events driving the signal. Cite sources inline: [Source: Yahoo Finance 2026-03-29]",
-      "ta_context": "1 sentence: RSI level with label, MACD direction, DMA position. Example: 'RSI 58 (neutral). MACD bullish. +4.2% vs 200DMA.' Omit field entirely if TA data unavailable.",
+      "catalyst": "2-3 sentences on recent news or events relevant to this holding. If no material events: set to 'No material events this week.' Cite sources inline.",
+      "ta_context": "2 sentences: (1) What the RSI level means in plain English, e.g. 'RSI 67 suggests the stock is approaching overbought territory after a recent run.' (2) What the DMA position implies, e.g. 'Trading 8% above the 200-day moving average indicates momentum remains above the long-term trend.' Omit field entirely if TA data unavailable.",
       "upcoming_catalyst": "Next known event to watch",
       "what_to_watch": "Single most important risk or trigger right now",
       "risk_change": "increased" | "decreased" | "unchanged",
-      "citations": ["Source: Yahoo Finance [date] — [headline]", "Source: ASX Announcement [date] — [headline]"]
+      "citations": ["Source Name, DD Mon YYYY — Exact Article Headline", "ASX Announcement, DD Mon YYYY — Exact Announcement Title"]
     }
   ],
   "overview": {
+    "executive_summary": "2-3 sentences covering the most important portfolio-wide observation this week. Name specific holdings. Highlight any signals that changed from the prior week if known.",
     "watch_list": ["3-5 specific items to watch this week"],
     "priority_actions": ["One line per ADD/TRIM/EXIT signal only — empty array if all HOLD"],
     "sector_breakdown": "1-2 sentences on sector concentration and imbalances",
     "region_exposure": "1-2 sentences on geographic exposure",
     "risk_profile": "1-2 sentences on overall portfolio risk",
-    "macro_note": "2-3 sentences: connect the economic calendar events to specific holdings in this portfolio",
+    "macro_note": "2-3 sentences naming at least 2 specific holdings from this portfolio and explaining how each upcoming macro event affects them specifically. Generic commentary is not acceptable.",
     "macro_context": {
       "rba_next_decision": "Date + expected outcome for AU bank/rate-sensitive holdings",
       "us_fed_watch": "Current Fed stance in 1 sentence",
@@ -288,7 +290,9 @@ export async function POST(req: Request) {
           return lines.join('\n');
         }).join('\n\n');
 
-        const synthesisPrompt = `You are a senior portfolio manager with 25 years of experience across Australian and US equity markets. You have managed funds through the GFC, COVID crash, and the 2022 rate shock. You think in terms of sector rotation, macro regime, and risk-adjusted returns.
+        const synthesisPrompt = `You are a senior analyst preparing an information briefing for a portfolio manager who will make their own investment decisions. Your role is to surface relevant information, highlight data points worth monitoring, and identify where risk has changed — not to prescribe action.
+
+Do NOT use imperative language. Use phrases like "the data suggests", "worth monitoring", "risk has increased", "the thesis remains intact". Never use "you should", "consider buying", "we recommend", or any other prescriptive language.
 
 Today is ${today}. Markets in this portfolio: ${marketsInPortfolio.join(', ')}.
 
@@ -308,12 +312,13 @@ ${economicCalendar}
 ─────────────────────────────────────────────
 YOUR STANDARDS
 ─────────────────────────────────────────────
-1. Cite every claim in "catalyst" inline: [Source: Yahoo Finance 2026-03-29] or [Source: ASX Announcement 28 Mar].
-2. "ta_context": 1 sentence — RSI level (with overbought/neutral/oversold), MACD direction, DMA position. Omit entirely if TA fields are null. Do NOT fabricate TA values.
-3. "macro_note": connect specific calendar events to specific holdings (e.g. "RBA hold on 1 Apr is near-term support for CBA"). Generic macro commentary is not useful.
-4. Signals: ADD/HOLD/TRIM/EXIT only. Long-term hold portfolio — default to HOLD unless there is clear evidence to act.
-5. "citations" array: 1-3 sources per stock, most important first.
+1. Cite every catalyst claim inline. Format: "Source Name, DD Mon YYYY — Exact Headline". Do not use vague citations like "Yahoo Finance" alone.
+2. "ta_context": 2 sentences — (1) plain-English RSI interpretation, (2) DMA position implication. Do NOT fabricate TA values. Omit field entirely if TA data is null.
+3. "macro_note": name ≥2 specific holdings from this portfolio and explain how each upcoming event affects them. Generic macro commentary ("rates are a headwind for equities") is not acceptable.
+4. Signals: ADD/HOLD/TRIM/EXIT only. Long-term hold portfolio — default to HOLD unless there is clear evidence of a meaningful change.
+5. "citations" array: 1-3 sources per stock, most important first. Format each as "Source Name, DD Mon YYYY — Exact Headline".
 6. If "Community Sentiment" is present in a ticker's data, include the flag verbatim as the final sentence of that ticker's "catalyst" field.
+7. Quiet week rule: if a ticker has no news AND TA is neutral (RSI 40-60) AND no announcements, set "catalyst" to "No material events this week." and "confidence" to "Low".
 
 Signal definitions:
 - ADD: Strengthen position — thesis building or entry attractive
