@@ -689,7 +689,7 @@ export default function Home() {
                 {/* Hero */}
                 <div className="text-center mb-6">
                   <p className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
-                    Stop spending 20 minutes on Reddit every morning.
+                    Stop manually researching every holding before market open.
                   </p>
                   <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                     AI-powered fund manager briefings — ADD/HOLD/TRIM/EXIT signals with TA and live news, delivered daily.
