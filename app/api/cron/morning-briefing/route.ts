@@ -50,6 +50,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ generated: 0, message: 'No portfolios found.' });
   }
 
+  // Debug: log the resolved origin so we can confirm which URL is being called
+  const _debugOrigin =
+    process.env.APP_URL ??
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : 'http://localhost:3000');
+  console.log('[cron] origin:', _debugOrigin, '| APP_URL:', process.env.APP_URL, '| VERCEL_PROJECT_PRODUCTION_URL:', process.env.VERCEL_PROJECT_PRODUCTION_URL, '| VERCEL_URL:', process.env.VERCEL_URL);
+
   // Batch-fetch all user emails once (avoids N+1 calls inside the loop)
   const emailMap = new Map<string, string>();
   try {
