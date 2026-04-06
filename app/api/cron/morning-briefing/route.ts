@@ -95,11 +95,13 @@ export async function GET(req: Request) {
 
     try {
       // Call the briefing API internally.
-      // APP_URL (production domain) is preferred over VERCEL_URL because
-      // deployment-specific URLs may have Vercel protection enabled.
+      // VERCEL_PROJECT_PRODUCTION_URL is the canonical production domain (Vercel built-in).
+      // VERCEL_URL is deployment-specific and may be behind Vercel protection — avoid it.
       const origin =
         process.env.APP_URL ??
-        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+        (process.env.VERCEL_PROJECT_PRODUCTION_URL
+          ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+          : 'http://localhost:3000');
 
       const res = await fetch(`${origin}/api/briefing`, {
         method: 'POST',
