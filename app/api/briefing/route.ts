@@ -1,9 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { computeTAForTicker, formatTA } from '@/lib/technical-indicators';
-import { fetchASXAnnouncements } from '@/lib/asx-announcements';
-import { fetchStocktwitsSentiment } from '@/lib/stocktwits-sentiment';
+import { formatTA } from '@/lib/technical-indicators';
+import { getCachedTA, getCachedASXAnnouncements, getCachedStocktwitsSentiment } from '@/lib/ticker-cache';
 import { buildEconomicCalendar } from '@/lib/economic-calendar';
 
 export const dynamic = 'force-dynamic';
@@ -246,14 +245,12 @@ export async function POST(req: Request) {
 
             const [news, ta, announcements] = await Promise.all([
               fetchTickerNews(h.ticker, market),
-              computeTAForTicker(h.ticker, market),
-              market === 'ASX' ? fetchASXAnnouncements(h.ticker) : Promise.resolve([]),
+              getCachedTA(h.ticker, market),
+              market === 'ASX' ? getCachedASXAnnouncements(h.ticker) : Promise.resolve([]),
             ]);
 
             // Sentiment requires TA (RSI/MACD) — sequential within ticker, tickers still parallel
-            const sentimentFlag = market !== 'ASX'
-              ? await fetchStocktwitsSentiment(h.ticker, ta)
-              : '';
+            const sentimentFlag = await getCachedStocktwitsSentiment(h.ticker, market, ta);
 
             if (news || ta.currentPrice !== null) {
               emit({ type: 'progress', message: `✓ ${h.ticker}` });

@@ -75,11 +75,34 @@
   **What to build:** `lib/stocktwits-sentiment.ts` — fetch last 30 messages per ticker, count Bullish/Bearish tags, return 1-line sentiment summary (e.g. "BHP: 12 bullish / 3 bearish (last 30 posts)"). Inject into briefing route alongside TA.
   **Effort:** ~15 mins CC+gstack | 2 hours human.
 
-- [ ] **Email delivery** — send morning briefing to opted-in users via Resend/SendGrid
+- [ ] **Email delivery** — send morning briefing to opted-in users via Resend
   **Why:** Daily habit requires the product to come to the user (inbox = phone). A subscription product with no delivery mechanism is just a website.
-  **Context:** Cron already runs at 09:30 AEST, briefing pre-generated. Add SMTP + HTML email template.
-  **Production requirements:** Responsive HTML email (Gmail/Outlook/Apple Mail tested), one-click unsubscribe (Australian Spam Act), SPF/DKIM DNS records, bounce handling.
-  **Effort:** ~2–3 hours CC+gstack | 2–3 days human.
+  **Context:** Cron moves to 07:00 AEST. Full design spec in `~/.gstack/projects/danang0901-portfolio-briefing-app/Daniel Ang-main-design-20260406-152705.md`. Approved HTML reference at `~/.gstack/projects/danang0901-portfolio-briefing-app/designs/email-template-20260406/email-final-approved.html`.
+  **Key design decisions:**
+  - Subject line format: `Portfolio brief — Mon 6 Apr | ADD: AAPL` (signal in subject)
+  - Email structure: action strip FIRST, then executive summary, then stock cards
+  - Cards sorted by signal priority: ADD/TRIM first, then HOLD, EXIT last
+  - Signal labels in email: short codes (ADD/HOLD/TRIM/EXIT), not renamed labels
+  - Light mode only. Inline CSS required. Min 15px body text. 44px CTA height.
+  - Failure state: send "couldn't generate today" notice instead of silencing
+  - Bounce handling: set `email_briefing_enabled = false` on hard bounce
+  - Weekend: skip Sat/Sun (cron schedule `0 21 * * 0-4` UTC)
+  **Pre-build checklist:** Domain ownership confirmed, SPF/DKIM live in Resend before first send.
+  **Effort:** ~3–5 hours CC+gstack | 3–5 days human.
+
+- [ ] **Email card sort by signal priority** — ADD/TRIM signals first in email, HOLD last
+  **Why:** Doctor should see the one actionable card before the 7 HOLD cards. Action strip surfaces it, but card order reinforces priority.
+  **Context:** Email-only behavior. Web app card order stays as-is (user controls portfolio order there). Sort logic: ADD > TRIM > HOLD > EXIT in email.
+  **Effort:** ~5 mins CC+gstack | 30 mins human.
+  **Depends on:** Email delivery implementation.
+
+- [ ] **Landing page hero copy update** — replace generic hero with inbox-first framing
+  **Why:** Current copy ("Stop manually researching every holding before market open") speaks to active research behavior, not inbox-first professional behavior.
+  **What to change:** Hero headline and sub-headline only. Layout and sample card stay.
+  - New headline: "Your portfolio briefing in your inbox before work."
+  - New sub-headline: "What changed. What to watch. What (if anything) to act on."
+  - New body: "AI-generated daily brief for your exact holdings — delivered to your inbox at 7am."
+  **Effort:** ~5 mins CC+gstack | 30 mins human.
 
 ---
 

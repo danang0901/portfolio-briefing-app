@@ -1,11 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
+import { Resend } from 'resend';
 import { NextResponse } from 'next/server';
+import {
+  buildEmailHtml,
+  buildFailureEmailHtml,
+  buildSubject,
+  buildFailureSubject,
+  sortCards,
+} from '@/lib/email-template';
+import type { StockSignal, BriefingOverview } from '@/app/api/briefing/route';
 
 export const maxDuration = 300; // 5 min — allow for multiple users
 
-// Vercel cron schedule (vercel.json): "30 23 * * *"
-// That's 23:30 UTC = 09:30 AEST (UTC+10) = 10:30 AEDT (UTC+11 in summer).
-// The cron runs daily, 30 minutes before ASX open.
+// Vercel cron schedule (vercel.json): "0 21 * * 0-4"
+// That's 21:00 UTC Sun–Thu = 07:00 AEST Mon–Fri. No weekend sends.
 
 export async function GET(req: Request) {
   // Verify this is a legitimate Vercel cron request
@@ -27,10 +35,10 @@ export async function GET(req: Request) {
     auth: { persistSession: false },
   });
 
-  // Fetch all portfolios with at least one holding
+  // Fetch all portfolios with at least one holding (include email opt-in flag)
   const { data: portfolios, error } = await admin
     .from('portfolios')
-    .select('user_id, holdings')
+    .select('user_id, holdings, email_briefing_enabled')
     .not('holdings', 'is', null);
 
   if (error) {
@@ -42,11 +50,29 @@ export async function GET(req: Request) {
     return NextResponse.json({ generated: 0, message: 'No portfolios found.' });
   }
 
+  // Batch-fetch all user emails once (avoids N+1 calls inside the loop)
+  const emailMap = new Map<string, string>();
+  try {
+    const { data: { users } } = await admin.auth.admin.listUsers();
+    for (const u of users) {
+      if (u.email) emailMap.set(u.id, u.email);
+    }
+  } catch (authErr) {
+    console.warn('[cron] listUsers failed — email delivery disabled for this run:', authErr);
+  }
+
+  // Email client (null if RESEND_API_KEY not set — gracefully skips send)
+  const resendApiKey = process.env.RESEND_API_KEY;
+  const fromEmail    = process.env.RESEND_FROM_EMAIL ?? 'brief@portfoliobriefing.com.au';
+  const appUrl       = process.env.APP_URL ?? 'https://portfoliobriefing.com.au';
+  const resend       = resendApiKey ? new Resend(resendApiKey) : null;
+
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
   let generated = 0;
   let skipped   = 0;
+  let emailed   = 0;
   const errors: string[] = [];
 
   for (const row of portfolios) {
@@ -62,6 +88,10 @@ export async function GET(req: Request) {
       .single();
 
     if (existing) { skipped++; continue; }
+
+    const userEmail   = emailMap.get(row.user_id) ?? null;
+    const shouldEmail = Boolean(row.email_briefing_enabled && resend && userEmail);
+    const listUnsub   = '<mailto:unsubscribe@portfoliobriefing.com.au>';
 
     try {
       // Call the briefing API internally
@@ -125,17 +155,56 @@ export async function GET(req: Request) {
 
       if (insertErr) throw new Error(insertErr.message);
       generated++;
+
+      // Send email to opted-in users
+      if (shouldEmail && resend && userEmail) {
+        try {
+          const typedStocks   = briefingData.stocks as StockSignal[];
+          const typedOverview = briefingData.overview as BriefingOverview;
+          const sorted        = sortCards(typedStocks);
+
+          await resend.emails.send({
+            from:    fromEmail,
+            to:      userEmail,
+            subject: buildSubject(sorted, new Date()),
+            html:    buildEmailHtml(typedStocks, typedOverview, generatedAt, appUrl),
+            headers: { 'List-Unsubscribe': listUnsub },
+          });
+          emailed++;
+        } catch (emailErr) {
+          const msg = emailErr instanceof Error ? emailErr.message : String(emailErr);
+          console.error(`[cron] Email send failed for user ${row.user_id}:`, msg);
+          // Briefing was stored successfully — just the email failed. Not a hard error.
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[cron] Failed for user ${row.user_id}:`, msg);
       errors.push(`${row.user_id}: ${msg}`);
+
+      // Send failure notice to opted-in users so they aren't silently skipped
+      if (shouldEmail && resend && userEmail) {
+        try {
+          await resend.emails.send({
+            from:    fromEmail,
+            to:      userEmail,
+            subject: buildFailureSubject(new Date()),
+            html:    buildFailureEmailHtml(appUrl),
+            headers: { 'List-Unsubscribe': listUnsub },
+          });
+        } catch {
+          // Swallow — the briefing error is already recorded above.
+        }
+      }
     }
 
     // Small delay between users to avoid rate-limiting
     await new Promise(r => setTimeout(r, 500));
   }
 
-  console.log(`[cron] Morning briefing complete — generated: ${generated}, skipped: ${skipped}, errors: ${errors.length}`);
+  console.log(
+    `[cron] Morning briefing complete — generated: ${generated}, skipped: ${skipped}, emailed: ${emailed}, errors: ${errors.length}`,
+  );
 
-  return NextResponse.json({ generated, skipped, errors });
+  return NextResponse.json({ generated, skipped, emailed, errors });
 }

@@ -57,6 +57,17 @@ const RISK_COLOR: Record<string, string> = {
   unchanged:  '#a8a29e',
 };
 
+// ── Beginner-mode plain-English signal summaries ──────────────────────────────
+
+const SIGNAL_BEGINNER_SUMMARY: Record<string, string> = {
+  ADD:  'The data suggests this holding is worth building on.',
+  HOLD: 'Nothing urgent — the investment case looks intact.',
+  TRIM: 'Risk has increased — worth reviewing your position size.',
+  EXIT: 'The original investment case has changed materially.',
+};
+
+const BEGINNER_VIEW_KEY = 'portfolio-beginner-view';
+
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
 const STORAGE_KEY  = 'portfolio-briefing-holdings';
@@ -115,6 +126,13 @@ function saveCachedBriefing(data: BriefingData) {
   } catch {}
 }
 
+function loadBeginnerView(): boolean {
+  if (typeof window === 'undefined') return true;
+  const raw = localStorage.getItem(BEGINNER_VIEW_KEY);
+  // null = never set → default to beginner view (true)
+  return raw === null || raw === 'true';
+}
+
 // ── TradingView Chart ─────────────────────────────────────────────────────────
 
 function TradingViewChart({ ticker, market = 'ASX' }: { ticker: string; market?: string }) {
@@ -135,7 +153,12 @@ function TradingViewChart({ ticker, market = 'ASX' }: { ticker: string; market?:
 
 // ── Stock Signal Card ─────────────────────────────────────────────────────────
 
-function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price?: { label: string; direction: 'up' | 'down' | 'flat' | null }; market?: string }) {
+function StockCard({ stock, price, market = 'ASX', beginnerView = true }: {
+  stock: StockSignal;
+  price?: { label: string; direction: 'up' | 'down' | 'flat' | null };
+  market?: string;
+  beginnerView?: boolean;
+}) {
   const [chartOpen, setChartOpen] = useState(false);
   const [citationsOpen, setCitationsOpen] = useState(false);
 
@@ -144,7 +167,7 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
 
       {/* Top row: ticker + signal badge */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2.5">
           <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>
             {stock.ticker}
@@ -165,40 +188,49 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
         </span>
       </div>
 
-      {/* Sector + country + confidence + risk row */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        <span className="text-xs px-2 py-0.5 rounded-md font-medium"
-          style={{ background: '#1e3a5f', color: '#93c5fd' }}>
-          {stock.sector}
-        </span>
-        <span className="text-xs px-2 py-0.5 rounded-md font-medium"
-          style={{ background: '#14352a', color: '#6ee7b7' }}>
-          {stock.country}
-        </span>
-        <span className="text-xs px-2 py-0.5 rounded-md"
-          style={{ background: '#1c1917', color: '#a8a29e' }}>
-          <span className="font-mono" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
-            {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
-          </span>
-          {' '}{stock.confidence}
-          <span style={{ color: '#44403c', margin: '0 5px' }}>|</span>
-          Risk{' '}
-          <span style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e' }}>
-            {RISK_ICON[stock.risk_change] ?? '–'}
-          </span>
-        </span>
-      </div>
+      {/* Beginner-mode: plain-English signal summary */}
+      {beginnerView && (
+        <p className="text-xs mb-3" style={{ color: '#94a3b8' }}>
+          {SIGNAL_BEGINNER_SUMMARY[stock.signal] ?? ''}
+        </p>
+      )}
 
-      {/* Thesis status */}
-      <div className="flex items-center gap-1.5 mb-3">
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Thesis:</span>
-        <span className="text-xs font-semibold capitalize"
-          style={THESIS_STYLE[stock.thesis_status] ?? {}}>
-          {stock.thesis_status}
-        </span>
-      </div>
+      {/* Detail-mode: sector + country + confidence + risk + thesis */}
+      {!beginnerView && (
+        <>
+          <div className="flex flex-wrap gap-2 mb-3">
+            <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+              style={{ background: '#1e3a5f', color: '#93c5fd' }}>
+              {stock.sector}
+            </span>
+            <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+              style={{ background: '#14352a', color: '#6ee7b7' }}>
+              {stock.country}
+            </span>
+            <span className="text-xs px-2 py-0.5 rounded-md"
+              style={{ background: '#1c1917', color: '#a8a29e' }}>
+              <span className="font-mono" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
+                {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
+              </span>
+              {' '}{stock.confidence}
+              <span style={{ color: '#44403c', margin: '0 5px' }}>|</span>
+              Risk{' '}
+              <span style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e' }}>
+                {RISK_ICON[stock.risk_change] ?? '–'}
+              </span>
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 mb-3">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Thesis:</span>
+            <span className="text-xs font-semibold capitalize"
+              style={THESIS_STYLE[stock.thesis_status] ?? {}}>
+              {stock.thesis_status}
+            </span>
+          </div>
+        </>
+      )}
 
-      {/* Technical analysis context */}
+      {/* Technical analysis context — shown in both modes (already plain-English from AI) */}
       {stock.ta_context && (
         <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
           style={{ background: '#0f172a', color: '#7dd3fc', border: '1px solid #1e3a5f' }}>
@@ -229,8 +261,8 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
         </div>
       )}
 
-      {/* Citations */}
-      {stock.citations && stock.citations.length > 0 && (
+      {/* Citations — detail mode only */}
+      {!beginnerView && stock.citations && stock.citations.length > 0 && (
         <div className="mt-2">
           <button
             onClick={() => setCitationsOpen(o => !o)}
@@ -281,6 +313,8 @@ export default function Home() {
   const [authLoading, setAuthLoading]   = useState(true);
   const [countdown, setCountdown]       = useState('');
   const [signalCount, setSignalCount]   = useState<number | null>(null);
+  const [beginnerView, setBeginnerView] = useState<boolean>(true);
+  const [showEmailOptIn, setShowEmailOptIn] = useState(false);
 
   const portfolioRef = useRef<Holding[]>(DEFAULT_PORTFOLIO);
   const userRef      = useRef<User | null>(null);
@@ -294,6 +328,7 @@ export default function Home() {
   useEffect(() => {
     const loaded = loadPortfolio();
     setPortfolio(loaded);
+    setBeginnerView(loadBeginnerView());
 
     // Restore today's cached briefing (avoids regenerating on refresh)
     const cached = loadCachedBriefing();
@@ -313,10 +348,10 @@ export default function Home() {
 
         if (!currentUser) return;
 
-        // Load portfolio from Supabase
+        // Load portfolio from Supabase (also checks email_briefing_enabled for opt-in)
         const { data: portData } = await supabase
           .from('portfolios')
-          .select('holdings')
+          .select('holdings, email_briefing_enabled')
           .eq('user_id', currentUser.id)
           .single();
 
@@ -330,6 +365,11 @@ export default function Home() {
             holdings: portfolioRef.current,
             updated_at: new Date().toISOString(),
           });
+        }
+
+        // NULL = never asked → show opt-in modal
+        if (portData?.email_briefing_enabled == null) {
+          setShowEmailOptIn(true);
         }
 
         // Load today's stored briefing from Supabase if not already loaded
@@ -371,6 +411,11 @@ export default function Home() {
       });
     }
   }, [portfolio]);
+
+  // ── Persist beginner view preference ──────────────────────────────────────
+  useEffect(() => {
+    try { localStorage.setItem(BEGINNER_VIEW_KEY, String(beginnerView)); } catch {}
+  }, [beginnerView]);
 
   // ── Fetch prices whenever briefing data changes ────────────────────────────
   const fetchPrices = useCallback(async (holdings: { ticker: string; market: string }[]) => {
@@ -419,6 +464,16 @@ export default function Home() {
       provider: 'google',
       options: { redirectTo: window.location.origin },
     });
+  }
+
+  async function saveEmailPreference(enabled: boolean) {
+    setShowEmailOptIn(false);
+    const currentUser = userRef.current;
+    if (!currentUser || !isSupabaseConfigured) return;
+    await supabase.from('portfolios').update({
+      email_briefing_enabled: enabled,
+      updated_at: new Date().toISOString(),
+    }).eq('user_id', currentUser.id);
   }
 
   async function signOut() {
@@ -804,7 +859,7 @@ export default function Home() {
             {briefingLoading && streamingStocks.length > 0 && (
               <div className="mb-2 animate-fade-in">
                 {streamingStocks.map(stock => (
-                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} />
+                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} beginnerView={beginnerView} />
                 ))}
                 <p className="text-xs text-center py-2" style={{ color: 'var(--text-muted)' }}>
                   Loading remaining holdings…
@@ -901,12 +956,19 @@ export default function Home() {
                 )}
 
                 {/* ── Stock Signal Cards ── */}
-                <p className="text-xs font-semibold tracking-wider mb-3"
-                  style={{ color: '#6b7280' }}>
-                  AI PERSPECTIVE — PER HOLDING
-                </p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold tracking-wider" style={{ color: '#6b7280' }}>
+                    AI PERSPECTIVE — PER HOLDING
+                  </p>
+                  <button
+                    onClick={() => setBeginnerView(v => !v)}
+                    className="text-xs px-2.5 py-1 rounded-lg"
+                    style={{ background: 'var(--bg-card)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                    {beginnerView ? 'Show full analysis' : 'Simplified view'}
+                  </button>
+                </div>
                 {briefingData.stocks.map(stock => (
-                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} />
+                  <StockCard key={stock.ticker} stock={stock} price={prices[stock.ticker]} market={marketMap[stock.ticker] ?? 'ASX'} beginnerView={beginnerView} />
                 ))}
 
                 {/* ── Portfolio Overview ── */}
@@ -1097,6 +1159,34 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* ── Email opt-in modal ── */}
+      {showEmailOptIn && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center pb-6 px-4"
+          style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="w-full max-w-sm rounded-2xl p-6"
+            style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+            <p className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+              Get your briefing by email
+            </p>
+            <p className="text-sm mb-4 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              Receive today's AI perspective on your portfolio every morning at 9:30am AEST — straight to your inbox.
+            </p>
+            <button
+              onClick={() => saveEmailPreference(true)}
+              className="w-full py-3 rounded-xl text-sm font-semibold mb-2"
+              style={{ background: 'var(--accent)', color: '#fff', cursor: 'pointer', border: 'none' }}>
+              Yes, email me my briefing
+            </button>
+            <button
+              onClick={() => saveEmailPreference(false)}
+              className="w-full py-2 text-sm"
+              style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}>
+              No thanks
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
