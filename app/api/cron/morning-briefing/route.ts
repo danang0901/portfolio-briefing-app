@@ -94,10 +94,12 @@ export async function GET(req: Request) {
     const listUnsub   = '<mailto:unsubscribe@portfoliobriefing.com.au>';
 
     try {
-      // Call the briefing API internally
-      const origin = process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'http://localhost:3000';
+      // Call the briefing API internally.
+      // APP_URL (production domain) is preferred over VERCEL_URL because
+      // deployment-specific URLs may have Vercel protection enabled.
+      const origin =
+        process.env.APP_URL ??
+        (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
       const res = await fetch(`${origin}/api/briefing`, {
         method: 'POST',
