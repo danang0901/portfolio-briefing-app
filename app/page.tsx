@@ -14,10 +14,10 @@ type EditingState = { index: number; field: 'ticker' | 'units' | 'market'; previ
 // ── Signal styling ────────────────────────────────────────────────────────────
 
 const SIGNAL_STYLE: Record<string, React.CSSProperties> = {
-  ADD:  { background: '#052e16', color: '#4ade80', border: '1px solid #166534' },
-  HOLD: { background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c' },
-  TRIM: { background: '#431407', color: '#fb923c', border: '1px solid #9a3412' },
-  EXIT: { background: '#450a0a', color: '#f87171', border: '1px solid #991b1b' },
+  ADD:  { background: 'rgba(34,197,94,0.1)',   color: '#4ade80', border: '1px solid rgba(34,197,94,0.22)',   fontWeight: 600 },
+  HOLD: { background: 'rgba(148,163,184,0.08)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.18)', fontWeight: 600 },
+  TRIM: { background: 'rgba(251,146,60,0.1)',  color: '#fb923c', border: '1px solid rgba(251,146,60,0.22)',  fontWeight: 600 },
+  EXIT: { background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.22)', fontWeight: 600 },
 };
 
 const SIGNAL_LABEL: Record<string, string> = {
@@ -163,7 +163,7 @@ function StockCard({ stock, price, market = 'ASX', beginnerView = true }: {
   const [citationsOpen, setCitationsOpen] = useState(false);
 
   return (
-    <div className="rounded-xl p-5 mb-3"
+    <div className="rounded-xl p-5 mb-3 transition-colors"
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
 
       {/* Top row: ticker + signal badge */}
@@ -682,28 +682,38 @@ export default function Home() {
 
   return (
     <main className="min-h-screen" style={{ background: 'var(--bg-primary)' }}>
-      <div className="max-w-xl mx-auto px-4 py-8">
 
-        {/* ── Header ── */}
-        <div className="flex items-start justify-between mb-8">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+      {/* ── Sticky glass header ── */}
+      <header className="sticky top-0 z-40 w-full"
+        style={{ background: 'rgba(5,10,20,0.88)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', borderBottom: '1px solid var(--border)' }}>
+        <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between">
+
+          {/* Logo */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)' }}>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+                <polyline points="16 7 22 7 22 13"/>
+              </svg>
+            </div>
+            <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--text-primary)' }}>
               Portfolio Briefing
-            </h1>
-            <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{today}</p>
+            </span>
           </div>
 
+          {/* Auth button */}
           {isSupabaseConfigured && !authLoading && (
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex items-center gap-2">
               {user ? (
                 <>
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <span className="text-xs hidden sm:block" style={{ color: 'var(--text-muted)' }}>
                     {user.email?.split('@')[0]}
                   </span>
                   <button
                     onClick={signOut}
                     className="text-xs px-3 py-1.5 rounded-lg"
-                    style={{ background: 'var(--bg-card)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                    style={{ background: 'var(--bg-card)', color: 'var(--text-secondary)', border: '1px solid var(--border)', cursor: 'pointer' }}>
                     Sign out
                   </button>
                 </>
@@ -711,7 +721,7 @@ export default function Home() {
                 <button
                   onClick={signIn}
                   className="text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5"
-                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>
+                  style={{ background: 'var(--bg-card)', color: 'var(--text-primary)', border: '1px solid var(--border-strong)', cursor: 'pointer' }}>
                   <svg viewBox="-3 -3 30 30" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
                     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
                     <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
@@ -724,21 +734,37 @@ export default function Home() {
             </div>
           )}
         </div>
+      </header>
+
+      <div className="max-w-2xl mx-auto px-4 py-6">
+        {/* Date context */}
+        <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>{today}</p>
 
         {/* ── Tabs ── */}
         <div className="flex gap-1 p-1 rounded-xl mb-6"
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-          {(['briefing', 'portfolio'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-              style={tab === t
-                ? { background: 'var(--accent)', color: '#fff' }
-                : { color: 'var(--text-muted)' }}>
-              {t === 'briefing' ? '📊  Briefing' : '💼  Portfolio'}
-            </button>
-          ))}
+          <button
+            onClick={() => setTab('briefing')}
+            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
+            style={tab === 'briefing'
+              ? { background: 'var(--accent)', color: '#fff' }
+              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            Briefing
+          </button>
+          <button
+            onClick={() => setTab('portfolio')}
+            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
+            style={tab === 'portfolio'
+              ? { background: 'var(--accent)', color: '#fff' }
+              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            </svg>
+            Portfolio
+          </button>
         </div>
 
         {/* ── BRIEFING TAB ── */}
@@ -749,13 +775,33 @@ export default function Home() {
             {isSupabaseConfigured && !user && !authLoading ? (
               <div className="animate-fade-in">
                 {/* Hero */}
-                <div className="text-center mb-6">
-                  <p className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
-                    Stop manually researching every holding before market open.
+                <div className="text-center mb-8 pt-4">
+                  {/* Eyebrow */}
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs mb-5"
+                    style={{ background: 'rgba(59,130,246,0.08)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.18)' }}>
+                    <span className="w-1.5 h-1.5 rounded-full inline-block flex-shrink-0" style={{ background: '#3b82f6' }} />
+                    AI-powered · ASX &amp; US markets
+                  </div>
+                  {/* Headline */}
+                  <h2 className="text-2xl sm:text-3xl font-bold mb-3 leading-tight tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                    Stop researching every holding<br/>
+                    <span style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #818cf8 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+                      before market open.
+                    </span>
+                  </h2>
+                  {/* Subtext */}
+                  <p className="text-sm mb-5 max-w-sm mx-auto leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                    ADD/HOLD/TRIM/EXIT signals with technical analysis and live news — delivered daily.
                   </p>
-                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                    AI-powered fund manager briefings — ADD/HOLD/TRIM/EXIT signals with TA and live news, delivered daily.
-                  </p>
+                  {/* Feature chips */}
+                  <div className="flex flex-wrap justify-center gap-2 mb-7">
+                    {['Technical analysis', 'Live news', 'ASX + US stocks', '~60s to generate'].map(f => (
+                      <span key={f} className="text-xs px-2.5 py-1 rounded-full"
+                        style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                        {f}
+                      </span>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Static sample card */}
@@ -800,8 +846,8 @@ export default function Home() {
                 {/* Sign-in CTA */}
                 <button
                   onClick={signIn}
-                  className="w-full py-3 rounded-xl text-sm font-semibold mb-2 transition-all flex items-center justify-center gap-2"
-                  style={{ background: 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
+                  className="w-full py-3.5 rounded-xl text-sm font-semibold mb-3 transition-all flex items-center justify-center gap-2"
+                  style={{ background: '#f0f6fc', color: '#050a14', cursor: 'pointer', fontWeight: 600 }}>
                   <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
                     <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                     <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -820,7 +866,7 @@ export default function Home() {
                 <button
                   disabled
                   className="w-full py-3 rounded-xl text-sm font-semibold transition-all"
-                  style={{ background: 'var(--border)', color: 'var(--text-muted)', cursor: 'not-allowed' }}>
+                  style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--text-muted)', cursor: 'not-allowed', border: '1px solid var(--border)' }}>
                   <span className="flex items-center justify-center gap-2">
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10"/>
@@ -839,9 +885,11 @@ export default function Home() {
                 disabled={briefingLoading}
                 className="w-full py-3 rounded-xl text-sm font-semibold mb-2 transition-all"
                 style={{
-                  background: briefingLoading ? 'var(--border)' : 'var(--accent)',
+                  background: briefingLoading ? 'rgba(255,255,255,0.04)' : 'var(--accent)',
                   color: briefingLoading ? 'var(--text-muted)' : '#fff',
                   cursor: briefingLoading ? 'not-allowed' : 'pointer',
+                  border: briefingLoading ? '1px solid var(--border)' : 'none',
+                  boxShadow: briefingLoading ? 'none' : '0 0 24px rgba(59,130,246,0.28)',
                 }}>
                 {briefingLoading ? (
                   <span className="flex items-center justify-center gap-2">
@@ -883,9 +931,9 @@ export default function Home() {
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     {generatedTime ? `Generated ${generatedTime}` : 'Today\'s briefing'}
                     {briefingData.news_sourced && (
-                      <span className="ml-2 px-1.5 py-0.5 rounded text-xs"
-                        style={{ background: '#052e16', color: '#4ade80' }}>
-                        ✓ live news
+                      <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-medium"
+                        style={{ background: 'rgba(34,197,94,0.1)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.2)' }}>
+                        live news
                       </span>
                     )}
                   </p>
@@ -926,7 +974,7 @@ export default function Home() {
                     style={{ background: '#1c0a00', border: '1px solid #7c2d12' }}>
                     <p className="text-xs font-semibold tracking-wider mb-3"
                       style={{ color: '#fb923c' }}>
-                      ⚡ PRIORITY ACTIONS
+                      PRIORITY ACTIONS
                     </p>
                     <div className="space-y-2">
                       {briefingData.overview.priority_actions.map((action, i) => (
@@ -942,7 +990,7 @@ export default function Home() {
                     style={{ background: '#0c1a2e', border: '1px solid #1e3a5f' }}>
                     <p className="text-xs font-semibold tracking-wider mb-3"
                       style={{ color: '#60a5fa' }}>
-                      📋 THIS WEEK'S WATCH LIST
+                      THIS WEEK'S WATCH LIST
                     </p>
                     <div className="space-y-2">
                       {briefingData.overview.watch_list.map((item, i) => (
@@ -1001,8 +1049,13 @@ export default function Home() {
             ) : !briefingLoading && (
               <div className="rounded-xl p-10 text-center"
                 style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-                <div className="text-4xl mb-3">📊</div>
-                <p className="text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
+                <div className="w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
+                  style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)' }}>
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                  </svg>
+                </div>
+                <p className="text-sm font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
                   Your morning briefing is ready to generate.
                 </p>
                 <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
