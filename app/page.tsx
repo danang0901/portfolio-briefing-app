@@ -20,6 +20,21 @@ const SIGNAL_STYLE: Record<string, React.CSSProperties> = {
   EXIT: { background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.22)', fontWeight: 600 },
 };
 
+// Left border accent color per signal
+const SIGNAL_ACCENT: Record<string, string> = {
+  ADD:  '#22c55e',
+  HOLD: '#64748b',
+  TRIM: '#fb923c',
+  EXIT: '#f87171',
+};
+
+// Market badge styles
+const MARKET_STYLE: Record<string, React.CSSProperties> = {
+  ASX:    { background: 'rgba(59,130,246,0.1)',  color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)'  },
+  NASDAQ: { background: 'rgba(139,92,246,0.1)',  color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)'  },
+  NYSE:   { background: 'rgba(251,146,60,0.1)',  color: '#fb923c', border: '1px solid rgba(251,146,60,0.2)'  },
+};
+
 const SIGNAL_LABEL: Record<string, string> = {
   ADD:  'Accumulate Thesis',
   HOLD: 'Monitor',
@@ -161,136 +176,154 @@ function StockCard({ stock, price, market = 'ASX', beginnerView = true }: {
 }) {
   const [chartOpen, setChartOpen] = useState(false);
   const [citationsOpen, setCitationsOpen] = useState(false);
+  const accent = SIGNAL_ACCENT[stock.signal] ?? '#64748b';
 
   return (
-    <div className="rounded-xl p-5 mb-3 transition-colors"
-      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+    <div className="rounded-xl mb-3 overflow-hidden transition-colors"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderLeft: `3px solid ${accent}` }}>
+      <div className="p-4">
 
-      {/* Top row: ticker + signal badge */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2.5">
-          <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>
-            {stock.ticker}
+        {/* Top row: ticker + price + signal badge */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <span className="font-mono font-bold text-lg tracking-tight" style={{ color: 'var(--text-primary)', lineHeight: 1 }}>
+              {stock.ticker}
+            </span>
+            {price?.label && (
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded-md"
+                style={{
+                  background: price.direction === 'up' ? 'rgba(34,197,94,0.1)' : price.direction === 'down' ? 'rgba(248,113,113,0.1)' : 'rgba(148,163,184,0.08)',
+                  color: price.direction === 'up' ? '#4ade80' : price.direction === 'down' ? '#f87171' : '#94a3b8',
+                  border: `1px solid ${price.direction === 'up' ? 'rgba(34,197,94,0.2)' : price.direction === 'down' ? 'rgba(248,113,113,0.2)' : 'rgba(148,163,184,0.15)'}`,
+                }}>
+                {price.direction === 'up' ? '▲' : price.direction === 'down' ? '▼' : ''} {price.label}
+              </span>
+            )}
+          </div>
+          <span className="text-xs px-3 py-1.5 rounded-full font-bold tracking-wide"
+            style={SIGNAL_STYLE[stock.signal] ?? SIGNAL_STYLE.HOLD}>
+            {SIGNAL_LABEL[stock.signal] ?? stock.signal}
           </span>
-          {price?.label && (
-            <span className="text-xs font-mono px-1.5 py-0.5 rounded"
-              style={{
-                background: price.direction === 'up' ? '#052e16' : price.direction === 'down' ? '#450a0a' : '#1c1917',
-                color: price.direction === 'up' ? '#4ade80' : price.direction === 'down' ? '#f87171' : '#a8a29e',
-              }}>
-              {price.direction === 'up' ? '▲' : price.direction === 'down' ? '▼' : ''} {price.label}
-            </span>
-          )}
         </div>
-        <span className="text-xs px-3 py-1 rounded-full font-bold tracking-wider"
-          style={SIGNAL_STYLE[stock.signal] ?? SIGNAL_STYLE.HOLD}>
-          {SIGNAL_LABEL[stock.signal] ?? stock.signal}
-        </span>
-      </div>
 
-      {/* Beginner-mode: plain-English signal summary */}
-      {beginnerView && (
-        <p className="text-xs mb-3" style={{ color: '#94a3b8' }}>
-          {SIGNAL_BEGINNER_SUMMARY[stock.signal] ?? ''}
+        {/* Beginner-mode: plain-English signal summary */}
+        {beginnerView && (
+          <p className="text-xs mb-3 leading-relaxed" style={{ color: '#7c8fa8', fontStyle: 'italic' }}>
+            {SIGNAL_BEGINNER_SUMMARY[stock.signal] ?? ''}
+          </p>
+        )}
+
+        {/* Detail-mode: sector + country + confidence + risk + thesis */}
+        {!beginnerView && (
+          <>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+                style={{ background: 'rgba(30,58,95,0.6)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.15)' }}>
+                {stock.sector}
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+                style={{ background: 'rgba(20,53,42,0.6)', color: '#6ee7b7', border: '1px solid rgba(34,197,94,0.15)' }}>
+                {stock.country}
+              </span>
+              <span className="text-xs px-2 py-0.5 rounded-md flex items-center gap-1.5"
+                style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+                <span className="font-mono text-xs" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e', letterSpacing: '-1px' }}>
+                  {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
+                </span>
+                <span style={{ color: 'var(--border-strong)' }}>·</span>
+                Risk <span style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e', fontWeight: 600 }}>
+                  {RISK_ICON[stock.risk_change] ?? '–'}
+                </span>
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 mb-3">
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Thesis</span>
+              <span style={{ color: 'var(--border)' }}>·</span>
+              <span className="text-xs font-semibold capitalize"
+                style={THESIS_STYLE[stock.thesis_status] ?? {}}>
+                {stock.thesis_status}
+              </span>
+            </div>
+          </>
+        )}
+
+        {/* Technical analysis — shown in both modes */}
+        {stock.ta_context && (
+          <div className="text-xs mb-3 font-mono px-3 py-2 rounded-lg flex items-start gap-2"
+            style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(59,130,246,0.12)' }}>
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: '#3b82f6' }}>
+              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+            </svg>
+            {stock.ta_context}
+          </div>
+        )}
+
+        {/* Catalyst — main text */}
+        <p className="text-sm leading-relaxed mb-3" style={{ color: '#cbd5e1', lineHeight: '1.6' }}>
+          {stock.catalyst}
         </p>
-      )}
 
-      {/* Detail-mode: sector + country + confidence + risk + thesis */}
-      {!beginnerView && (
-        <>
-          <div className="flex flex-wrap gap-2 mb-3">
-            <span className="text-xs px-2 py-0.5 rounded-md font-medium"
-              style={{ background: '#1e3a5f', color: '#93c5fd' }}>
-              {stock.sector}
-            </span>
-            <span className="text-xs px-2 py-0.5 rounded-md font-medium"
-              style={{ background: '#14352a', color: '#6ee7b7' }}>
-              {stock.country}
-            </span>
-            <span className="text-xs px-2 py-0.5 rounded-md"
-              style={{ background: '#1c1917', color: '#a8a29e' }}>
-              <span className="font-mono" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
-                {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
-              </span>
-              {' '}{stock.confidence}
-              <span style={{ color: '#44403c', margin: '0 5px' }}>|</span>
-              Risk{' '}
-              <span style={{ color: RISK_COLOR[stock.risk_change] ?? '#a8a29e' }}>
-                {RISK_ICON[stock.risk_change] ?? '–'}
-              </span>
-            </span>
+        {/* Upcoming catalyst */}
+        {stock.upcoming_catalyst && (
+          <div className="flex items-start gap-2.5 mb-2.5 text-xs rounded-lg px-3 py-2.5"
+            style={{ background: 'rgba(30,41,59,0.7)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.12)' }}>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            <span className="leading-relaxed">{stock.upcoming_catalyst}</span>
           </div>
-          <div className="flex items-center gap-1.5 mb-3">
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Thesis:</span>
-            <span className="text-xs font-semibold capitalize"
-              style={THESIS_STYLE[stock.thesis_status] ?? {}}>
-              {stock.thesis_status}
-            </span>
+        )}
+
+        {/* What to watch */}
+        {stock.what_to_watch && (
+          <div className="flex items-start gap-2.5 mb-2.5 text-xs rounded-lg px-3 py-2.5"
+            style={{ background: 'rgba(28,18,7,0.8)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.12)' }}>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <span className="leading-relaxed">{stock.what_to_watch}</span>
           </div>
-        </>
-      )}
+        )}
 
-      {/* Technical analysis context — shown in both modes (already plain-English from AI) */}
-      {stock.ta_context && (
-        <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
-          style={{ background: '#0f172a', color: '#7dd3fc', border: '1px solid #1e3a5f' }}>
-          {stock.ta_context}
-        </div>
-      )}
-
-      {/* Catalyst */}
-      <p className="text-sm leading-relaxed mb-3" style={{ color: '#d1d5db' }}>
-        {stock.catalyst}
-      </p>
-
-      {/* Upcoming catalyst */}
-      {stock.upcoming_catalyst && (
-        <div className="flex items-start gap-2 mb-3 text-xs rounded-lg px-3 py-2"
-          style={{ background: '#1e293b', color: '#93c5fd', border: '1px solid #1e3a5f' }}>
-          <span style={{ flexShrink: 0 }}>📅</span>
-          <span>{stock.upcoming_catalyst}</span>
-        </div>
-      )}
-
-      {/* What to watch */}
-      {stock.what_to_watch && (
-        <div className="flex items-start gap-2 text-xs rounded-lg px-3 py-2 mb-3"
-          style={{ background: '#1c1207', color: '#fbbf24', border: '1px solid #451a03' }}>
-          <span style={{ flexShrink: 0 }}>👀</span>
-          <span>{stock.what_to_watch}</span>
-        </div>
-      )}
-
-      {/* Citations — detail mode only */}
-      {!beginnerView && stock.citations && stock.citations.length > 0 && (
-        <div className="mt-2">
+        {/* Bottom actions row */}
+        <div className="flex items-center gap-3 mt-3 pt-2.5"
+          style={{ borderTop: '1px solid var(--border)' }}>
+          {/* Chart toggle */}
           <button
-            onClick={() => setCitationsOpen(o => !o)}
-            className="text-xs flex items-center gap-1 mb-1"
-            style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-            <span>{citationsOpen ? '▲' : '▼'}</span>
-            <span>{citationsOpen ? 'Hide sources' : `Sources (${stock.citations.length})`}</span>
+            onClick={() => setChartOpen(o => !o)}
+            className="flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 transition-colors"
+            style={{ color: chartOpen ? '#60a5fa' : 'var(--text-muted)', background: chartOpen ? 'rgba(59,130,246,0.08)' : 'transparent', border: `1px solid ${chartOpen ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            {chartOpen ? 'Hide chart' : 'Chart'}
           </button>
-          {citationsOpen && (
-            <ul className="space-y-0.5 pl-3" style={{ borderLeft: '2px solid var(--border)' }}>
-              {stock.citations.map((c, i) => (
-                <li key={i} className="text-xs" style={{ color: '#6b7280' }}>{c}</li>
-              ))}
-            </ul>
+
+          {/* Citations toggle — detail mode only */}
+          {!beginnerView && stock.citations && stock.citations.length > 0 && (
+            <button
+              onClick={() => setCitationsOpen(o => !o)}
+              className="flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5 transition-colors"
+              style={{ color: citationsOpen ? '#60a5fa' : 'var(--text-muted)', background: citationsOpen ? 'rgba(59,130,246,0.08)' : 'transparent', border: `1px solid ${citationsOpen ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              {stock.citations.length} {stock.citations.length === 1 ? 'source' : 'sources'}
+            </button>
           )}
         </div>
-      )}
 
-      {/* TradingView chart toggle */}
-      <button
-        onClick={() => setChartOpen(o => !o)}
-        className="text-xs flex items-center gap-1.5 mt-2"
-        style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
-        <span>{chartOpen ? '▲' : '▼'}</span>
-        <span>{chartOpen ? 'Hide chart' : 'View chart'}</span>
-      </button>
+        {/* Citations expanded */}
+        {citationsOpen && stock.citations && (
+          <ul className="mt-2.5 space-y-1 pl-3" style={{ borderLeft: '2px solid var(--border)' }}>
+            {stock.citations.map((c, i) => (
+              <li key={i} className="text-xs" style={{ color: 'var(--text-muted)' }}>{c}</li>
+            ))}
+          </ul>
+        )}
 
-      {chartOpen && <TradingViewChart ticker={stock.ticker} market={market} />}
+        {chartOpen && <TradingViewChart ticker={stock.ticker} market={market} />}
+      </div>
     </div>
   );
 }
@@ -971,14 +1004,24 @@ export default function Home() {
                 {/* ── Priority Actions (only shown when non-empty) ── */}
                 {briefingData.overview.priority_actions?.length > 0 && (
                   <div className="rounded-xl p-4 mb-4"
-                    style={{ background: '#1c0a00', border: '1px solid #7c2d12' }}>
-                    <p className="text-xs font-semibold tracking-wider mb-3"
-                      style={{ color: '#fb923c' }}>
-                      PRIORITY ACTIONS
-                    </p>
-                    <div className="space-y-2">
+                    style={{ background: 'rgba(28,10,0,0.7)', border: '1px solid rgba(124,45,18,0.5)' }}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fb923c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                      </svg>
+                      <p className="text-xs font-semibold tracking-wider" style={{ color: '#fb923c' }}>
+                        PRIORITY ACTIONS
+                      </p>
+                    </div>
+                    <div className="space-y-2.5">
                       {briefingData.overview.priority_actions.map((action, i) => (
-                        <p key={i} className="text-sm" style={{ color: '#fed7aa' }}>{action}</p>
+                        <div key={i} className="flex items-start gap-3">
+                          <span className="text-xs font-bold flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center mt-0.5"
+                            style={{ background: 'rgba(251,146,60,0.15)', color: '#fb923c', fontSize: '10px' }}>
+                            {i + 1}
+                          </span>
+                          <p className="text-sm leading-relaxed" style={{ color: '#fed7aa' }}>{action}</p>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -1003,16 +1046,48 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* ── Stock Signal Cards ── */}
+                {/* ── Signal Summary Bar ── */}
+                {(() => {
+                  const counts = briefingData.stocks.reduce((acc, s) => {
+                    acc[s.signal] = (acc[s.signal] ?? 0) + 1;
+                    return acc;
+                  }, {} as Record<string, number>);
+                  const items = [
+                    { signal: 'ADD',  label: 'Add',  color: '#4ade80', bg: 'rgba(34,197,94,0.08)'  },
+                    { signal: 'HOLD', label: 'Hold', color: '#94a3b8', bg: 'rgba(148,163,184,0.06)' },
+                    { signal: 'TRIM', label: 'Trim', color: '#fb923c', bg: 'rgba(251,146,60,0.08)' },
+                    { signal: 'EXIT', label: 'Exit', color: '#f87171', bg: 'rgba(248,113,113,0.08)' },
+                  ].filter(i => (counts[i.signal] ?? 0) > 0);
+                  if (!items.length) return null;
+                  return (
+                    <div className="flex items-center gap-2 mb-4 flex-wrap">
+                      {items.map(({ signal, label, color, bg }) => (
+                        <div key={signal} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                          style={{ background: bg, color, border: `1px solid ${color}22` }}>
+                          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: color }} />
+                          {counts[signal]} {label}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* ── Stock Signal Cards header + view toggle ── */}
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-xs font-semibold tracking-wider" style={{ color: '#6b7280' }}>
-                    AI PERSPECTIVE — PER HOLDING
+                  <p className="text-xs font-medium tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                    PER HOLDING
                   </p>
                   <button
                     onClick={() => setBeginnerView(v => !v)}
-                    className="text-xs px-2.5 py-1 rounded-lg"
-                    style={{ background: 'var(--bg-card)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                    {beginnerView ? 'Show full analysis' : 'Simplified view'}
+                    className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors"
+                    style={{ background: beginnerView ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.04)', color: beginnerView ? '#60a5fa' : 'var(--text-muted)', border: `1px solid ${beginnerView ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+                    <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      {beginnerView
+                        ? <><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></>
+                        : <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></>
+                      }
+                    </svg>
+                    {beginnerView ? 'Full analysis' : 'Simple view'}
                   </button>
                 </div>
                 {briefingData.stocks.map(stock => (
@@ -1020,25 +1095,27 @@ export default function Home() {
                 ))}
 
                 {/* ── Portfolio Overview ── */}
-                <div className="rounded-xl p-5 mt-1"
-                  style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-                  <p className="text-xs font-semibold tracking-wider mb-4"
-                    style={{ color: 'var(--text-muted)' }}>
-                    PORTFOLIO OVERVIEW
-                  </p>
-                  <div className="space-y-4">
+                <div className="rounded-xl overflow-hidden mt-1"
+                  style={{ border: '1px solid var(--border)' }}>
+                  <div className="px-4 py-3"
+                    style={{ background: 'rgba(59,130,246,0.05)', borderBottom: '1px solid var(--border)' }}>
+                    <p className="text-xs font-semibold tracking-wider" style={{ color: '#60a5fa' }}>
+                      PORTFOLIO OVERVIEW
+                    </p>
+                  </div>
+                  <div style={{ background: 'var(--bg-card)' }}>
                     {[
-                      { key: 'sector_breakdown', label: 'SECTOR BREAKDOWN'  },
-                      { key: 'region_exposure',   label: 'REGION EXPOSURE'   },
-                      { key: 'risk_profile',      label: 'RISK PROFILE'      },
-                      { key: 'macro_note',        label: 'MACRO NOTE'        },
-                    ].map(({ key, label }) => (
-                      <div key={key}>
-                        <p className="text-xs font-medium tracking-wider mb-1.5"
-                          style={{ color: 'var(--accent)' }}>
+                      { key: 'sector_breakdown', label: 'Sectors'  },
+                      { key: 'region_exposure',   label: 'Regions'  },
+                      { key: 'risk_profile',      label: 'Risk'     },
+                      { key: 'macro_note',        label: 'Macro'    },
+                    ].map(({ key, label }, idx, arr) => (
+                      <div key={key} className="px-4 py-3"
+                        style={{ borderBottom: idx < arr.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                        <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>
                           {label}
                         </p>
-                        <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>
+                        <p className="text-sm leading-relaxed" style={{ color: '#cbd5e1' }}>
                           {briefingData.overview[key as keyof typeof briefingData.overview] as string}
                         </p>
                       </div>
@@ -1072,8 +1149,8 @@ export default function Home() {
             <div className="rounded-xl overflow-hidden mb-4"
               style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
               {/* Header */}
-              <div className="grid px-4 py-2 text-xs font-medium tracking-wider"
-                style={{ gridTemplateColumns: '1fr 88px 60px 32px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+              <div className="grid px-4 py-2.5 text-xs font-medium tracking-wider"
+                style={{ gridTemplateColumns: '1fr 96px 64px 32px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
                 <span>TICKER</span>
                 <span>EXCHANGE</span>
                 <span className="text-right">UNITS</span>
@@ -1088,7 +1165,7 @@ export default function Home() {
                 portfolio.map((h, i) => (
                   <div key={`${h.ticker}-${i}`}
                     className="grid items-center px-4 py-3"
-                    style={{ gridTemplateColumns: '1fr 88px 60px 32px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
+                    style={{ gridTemplateColumns: '1fr 96px 64px 32px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
 
                     {/* Ticker cell */}
                     {editing?.index === i && editing.field === 'ticker' ? (
@@ -1129,8 +1206,8 @@ export default function Home() {
                       </select>
                     ) : (
                       <span
-                        className="text-xs font-mono cursor-pointer px-1.5 py-0.5 rounded inline-block"
-                        style={{ background: '#1c1917', color: '#a8a29e' }}
+                        className="text-xs font-mono cursor-pointer px-2 py-0.5 rounded-md inline-block font-medium"
+                        style={{ ...(MARKET_STYLE[h.market] ?? MARKET_STYLE.ASX) }}
                         onClick={() => startEdit(i, 'market', h.market)}>
                         {h.market}
                       </span>
@@ -1184,10 +1261,16 @@ export default function Home() {
               </button>
 
               {portfolio.filter(h => h.ticker !== '').length > 0 && (
-                <div className="flex justify-between px-4 py-2 text-xs"
-                  style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}>
-                  <span>{portfolio.filter(h => h.ticker !== '').length} holdings</span>
-                  <span>{totalUnits.toLocaleString()} total units</span>
+                <div className="flex items-center justify-between px-4 py-2.5"
+                  style={{ borderTop: '1px solid var(--border)', background: 'rgba(255,255,255,0.01)' }}>
+                  <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <span className="font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      {portfolio.filter(h => h.ticker !== '').length} holdings
+                    </span>
+                    <span style={{ color: 'var(--border-strong)' }}>·</span>
+                    <span>{totalUnits.toLocaleString()} units</span>
+                  </div>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Tap to edit</span>
                 </div>
               )}
             </div>
