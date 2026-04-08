@@ -12,9 +12,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const supabaseUrl    = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
-const supabaseKey    = process.env.SUPABASE_SERVICE_ROLE_KEY
-  ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  ?? '';
+// Must use the service role key — this route reads ALL users' portfolios.
+// Never fall back to the anon key: with RLS enabled, the anon key would return
+// zero rows (silent failure); without RLS it would expose all user data.
+const supabaseKey    = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
 
 export async function GET(request: Request) {
   // Vercel cron auth
@@ -24,7 +25,9 @@ export async function GET(request: Request) {
   }
 
   if (!supabaseUrl || !supabaseKey) {
-    return NextResponse.json({ error: 'Supabase not configured' }, { status: 500 });
+    const missing = !supabaseUrl ? 'NEXT_PUBLIC_SUPABASE_URL' : 'SUPABASE_SERVICE_ROLE_KEY';
+    console.error(`[cache-warmup] ${missing} is not set — aborting`);
+    return NextResponse.json({ error: `Missing env var: ${missing}` }, { status: 500 });
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
