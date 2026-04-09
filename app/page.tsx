@@ -132,25 +132,36 @@ function savePortfolio(p: Holding[]) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch {}
 }
 
-function loadCachedBriefing(): BriefingData | null {
+// Stable fingerprint for portfolio comparison — order-independent.
+function portfolioFingerprint(holdings: Holding[]): string {
+  return [...holdings]
+    .sort((a, b) => a.ticker.localeCompare(b.ticker))
+    .map(h => `${h.ticker}:${h.market ?? 'ASX'}:${h.units}`)
+    .join(',');
+}
+
+function loadCachedBriefing(currentPortfolio?: Holding[]): BriefingData | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(BRIEFING_KEY);
     if (!raw) return null;
-    const { data, date } = JSON.parse(raw);
+    const { data, date, portfolioFp } = JSON.parse(raw);
     const today = new Date().toDateString();
     if (date !== today) return null; // stale — different day
+    // If we know the current portfolio and the cache has a fingerprint, verify they match
+    if (currentPortfolio && portfolioFp && portfolioFingerprint(currentPortfolio) !== portfolioFp) return null;
     return data as BriefingData;
   } catch {
     return null;
   }
 }
 
-function saveCachedBriefing(data: BriefingData) {
+function saveCachedBriefing(data: BriefingData, portfolio?: Holding[]) {
   try {
     localStorage.setItem(BRIEFING_KEY, JSON.stringify({
       data,
       date: new Date().toDateString(),
+      portfolioFp: portfolio ? portfolioFingerprint(portfolio) : undefined,
     }));
   } catch {}
 }
@@ -722,7 +733,7 @@ export default function Home() {
     setBeginnerView(loadBeginnerView());
 
     // Restore today's cached briefing (avoids regenerating on refresh)
-    const cached = loadCachedBriefing();
+    const cached = loadCachedBriefing(loaded);
     if (cached) setBriefingData(cached);
 
     if (!isSupabaseConfigured) {
@@ -769,7 +780,7 @@ export default function Home() {
 
         const { data: briefingRow } = await supabase
           .from('briefings')
-          .select('briefing_data')
+          .select('briefing_data, portfolio_snapshot')
           .eq('user_id', currentUser.id)
           .gte('created_at', todayStart.toISOString())
           .order('created_at', { ascending: false })
@@ -777,8 +788,14 @@ export default function Home() {
           .single();
 
         if (briefingRow?.briefing_data) {
-          setBriefingData(briefingRow.briefing_data as BriefingData);
-          saveCachedBriefing(briefingRow.briefing_data as BriefingData);
+          // Only serve cached briefing if it was generated for the same portfolio.
+          // If the user changed their holdings since the cron ran, discard the stale cache.
+          const snapshot = briefingRow.portfolio_snapshot as Holding[] | null;
+          const portfolioMatches = !snapshot || portfolioFingerprint(snapshot) === portfolioFingerprint(coerced);
+          if (portfolioMatches) {
+            setBriefingData(briefingRow.briefing_data as BriefingData);
+            saveCachedBriefing(briefingRow.briefing_data as BriefingData, coerced);
+          }
         }
       },
     );
@@ -985,7 +1002,7 @@ export default function Home() {
       setBriefingData(briefing);
       setStreamingStocks([]);
       setProgressMessage('');
-      saveCachedBriefing(briefing);
+      saveCachedBriefing(briefing, portfolio);
 
       // Route already stored the briefing server-side — skip client insert to avoid duplicates
       if (!fromCache && !isSupabaseConfigured) {
