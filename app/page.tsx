@@ -83,6 +83,19 @@ const SIGNAL_BEGINNER_SUMMARY: Record<string, string> = {
 
 const BEGINNER_VIEW_KEY = 'portfolio-beginner-view';
 
+// ── Picks: signal + confidence priority ──────────────────────────────────────
+
+const SIGNAL_PRIORITY: Record<string, number> = { ADD: 0, TRIM: 1, EXIT: 2, HOLD: 3 };
+const CONFIDENCE_PRIORITY: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
+
+function sortByActionPriority(stocks: StockSignal[]): StockSignal[] {
+  return [...stocks].sort((a, b) => {
+    const sigDiff = (SIGNAL_PRIORITY[a.signal] ?? 3) - (SIGNAL_PRIORITY[b.signal] ?? 3);
+    if (sigDiff !== 0) return sigDiff;
+    return (CONFIDENCE_PRIORITY[a.confidence] ?? 2) - (CONFIDENCE_PRIORITY[b.confidence] ?? 2);
+  });
+}
+
 // ── Storage helpers ───────────────────────────────────────────────────────────
 
 const STORAGE_KEY  = 'portfolio-briefing-holdings';
@@ -328,10 +341,119 @@ function StockCard({ stock, price, market = 'ASX', beginnerView = true }: {
   );
 }
 
+// ── Picks Card (compact, actionable-focused) ─────────────────────────────────
+
+function PicksCard({ stock, price, market = 'ASX' }: {
+  stock: StockSignal;
+  price?: { label: string; direction: 'up' | 'down' | 'flat' | null };
+  market?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
+
+  const accent = ({ ADD: '#22c55e', TRIM: '#fb923c', EXIT: '#f87171' } as Record<string, string>)[stock.signal] ?? '#94a3b8';
+  const accentBg = ({ ADD: 'rgba(34,197,94,0.05)', TRIM: 'rgba(251,146,60,0.05)', EXIT: 'rgba(248,113,113,0.05)' } as Record<string, string>)[stock.signal] ?? 'rgba(148,163,184,0.04)';
+
+  return (
+    <div className="rounded-xl mb-3"
+      style={{ background: accentBg, border: `1px solid ${accent}28`, borderLeft: `3px solid ${accent}` }}>
+      <div className="p-4">
+
+        {/* Top row: ticker + price + signal badge */}
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>
+              {stock.ticker}
+            </span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded font-medium"
+              style={{ ...(MARKET_STYLE[market] ?? MARKET_STYLE.ASX) }}>
+              {market}
+            </span>
+            {price?.label && (
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded"
+                style={{
+                  background: price.direction === 'up' ? 'rgba(34,197,94,0.1)' : price.direction === 'down' ? 'rgba(248,113,113,0.1)' : 'rgba(148,163,184,0.08)',
+                  color: price.direction === 'up' ? '#4ade80' : price.direction === 'down' ? '#f87171' : '#a8a29e',
+                }}>
+                {price.direction === 'up' ? '▲' : price.direction === 'down' ? '▼' : ''} {price.label}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs font-mono" style={{ color: CONFIDENCE_COLOR[stock.confidence] ?? '#a8a29e' }}>
+              {CONFIDENCE_DOTS[stock.confidence] ?? '○○○'}
+            </span>
+            <span className="text-xs px-2.5 py-1 rounded-full font-bold"
+              style={SIGNAL_STYLE[stock.signal] ?? SIGNAL_STYLE.HOLD}>
+              {stock.signal}
+            </span>
+          </div>
+        </div>
+
+        {/* TA context */}
+        {stock.ta_context && (
+          <div className="text-xs mb-2.5 font-mono px-2 py-1.5 rounded"
+            style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(30,58,95,0.5)' }}>
+            {stock.ta_context}
+          </div>
+        )}
+
+        {/* Catalyst — clamps to 3 lines unless expanded */}
+        <p className="text-sm leading-relaxed mb-1.5"
+          style={{
+            color: '#cbd5e1',
+            display: '-webkit-box',
+            WebkitLineClamp: expanded ? undefined : 3,
+            WebkitBoxOrient: 'vertical',
+            overflow: expanded ? 'visible' : 'hidden',
+          } as React.CSSProperties}>
+          {stock.catalyst}
+        </p>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-xs mb-2.5"
+          style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          {expanded ? '▲ Less' : '▼ More'}
+        </button>
+
+        {/* Upcoming catalyst — only when expanded */}
+        {expanded && stock.upcoming_catalyst && (
+          <div className="flex items-start gap-2 text-xs rounded-lg px-3 py-2 mb-2.5"
+            style={{ background: 'rgba(30,41,59,0.7)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.12)' }}>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
+            <span>{stock.upcoming_catalyst}</span>
+          </div>
+        )}
+
+        {/* Bottom row: chart + sector/country */}
+        <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--border)' }}>
+          <button
+            onClick={() => setChartOpen(o => !o)}
+            className="flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5"
+            style={{ color: chartOpen ? '#60a5fa' : 'var(--text-muted)', background: chartOpen ? 'rgba(59,130,246,0.08)' : 'transparent', border: `1px solid ${chartOpen ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            {chartOpen ? 'Hide chart' : 'Chart'}
+          </button>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {stock.sector}{stock.country ? ` · ${stock.country}` : ''}
+          </span>
+        </div>
+
+        {chartOpen && <TradingViewChart ticker={stock.ticker} market={market} />}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [tab, setTab]                   = useState<'briefing' | 'portfolio'>('briefing');
+  const [tab, setTab]                   = useState<'briefing' | 'picks' | 'portfolio'>('briefing');
+  const [picksFilter, setPicksFilter]   = useState<'all' | 'add' | 'review'>('all');
   const [portfolio, setPortfolio]       = useState<Holding[]>(DEFAULT_PORTFOLIO);
   const [history, setHistory]           = useState<HistoryEntry[]>([]);
   const [briefingData, setBriefingData]         = useState<BriefingData | null>(null);
@@ -788,6 +910,17 @@ export default function Home() {
             Briefing
           </button>
           <button
+            onClick={() => setTab('picks')}
+            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
+            style={tab === 'picks'
+              ? { background: 'var(--accent)', color: '#fff' }
+              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+            </svg>
+            Picks
+          </button>
+          <button
             onClick={() => setTab('portfolio')}
             className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
             style={tab === 'portfolio'
@@ -1140,6 +1273,145 @@ export default function Home() {
                 </p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── PICKS TAB ── */}
+        {tab === 'picks' && (
+          <div className="animate-fade-in">
+            {!briefingData ? (
+              <div className="rounded-xl p-10 text-center"
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                <div className="w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
+                  style={{ background: 'linear-gradient(135deg, #22c55e 0%, #15803d 100%)' }}>
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                  </svg>
+                </div>
+                <p className="text-sm font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  No picks yet.
+                </p>
+                <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+                  Generate your briefing to see actionable ADD and TRIM/EXIT signals surfaced here.
+                </p>
+                <button
+                  onClick={() => setTab('briefing')}
+                  className="text-sm px-4 py-2 rounded-lg font-medium"
+                  style={{ background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer' }}>
+                  Go to Briefing
+                </button>
+              </div>
+            ) : (() => {
+              const actionable = briefingData.stocks.filter(s => s.signal !== 'HOLD');
+              const sorted = sortByActionPriority(actionable);
+              const addCount = actionable.filter(s => s.signal === 'ADD').length;
+              const reviewCount = actionable.filter(s => s.signal === 'TRIM' || s.signal === 'EXIT').length;
+              const filtered = picksFilter === 'add'
+                ? sorted.filter(s => s.signal === 'ADD')
+                : picksFilter === 'review'
+                ? sorted.filter(s => s.signal === 'TRIM' || s.signal === 'EXIT')
+                : sorted;
+
+              return (
+                <>
+                  {/* Header */}
+                  <div className="mb-4">
+                    <p className="text-xs font-semibold tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+                      ACTIONABLE SIGNALS
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      ADD and TRIM/EXIT signals from today&apos;s briefing, ranked by confidence.
+                    </p>
+                  </div>
+
+                  {/* Signal summary chips */}
+                  <div className="flex items-center gap-2 mb-4 flex-wrap">
+                    {addCount > 0 && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ background: 'rgba(34,197,94,0.08)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.22)' }}>
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: '#22c55e' }} />
+                        {addCount} Accumulate
+                      </div>
+                    )}
+                    {reviewCount > 0 && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ background: 'rgba(251,146,60,0.08)', color: '#fb923c', border: '1px solid rgba(251,146,60,0.22)' }}>
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: '#fb923c' }} />
+                        {reviewCount} Review
+                      </div>
+                    )}
+                    {actionable.length === 0 && (
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ background: 'rgba(148,163,184,0.06)', color: '#94a3b8', border: '1px solid rgba(148,163,184,0.18)' }}>
+                        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: '#64748b' }} />
+                        No actionable signals
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Filter bar */}
+                  {actionable.length > 0 && (
+                    <div className="flex gap-1 p-1 rounded-xl mb-4"
+                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                      {([
+                        { key: 'all',    label: 'All picks' },
+                        { key: 'add',    label: `Accumulate${addCount ? ` (${addCount})` : ''}` },
+                        { key: 'review', label: `Review${reviewCount ? ` (${reviewCount})` : ''}` },
+                      ] as const).map(({ key, label }) => (
+                        <button
+                          key={key}
+                          onClick={() => setPicksFilter(key)}
+                          className="flex-1 py-1.5 rounded-lg text-xs font-medium transition-all"
+                          style={picksFilter === key
+                            ? { background: 'var(--accent)', color: '#fff' }
+                            : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Cards */}
+                  {filtered.length > 0 ? (
+                    filtered.map(stock => (
+                      <PicksCard
+                        key={stock.ticker}
+                        stock={stock}
+                        price={prices[stock.ticker]}
+                        market={marketMap[stock.ticker] ?? 'ASX'}
+                      />
+                    ))
+                  ) : actionable.length > 0 ? (
+                    <div className="rounded-xl p-8 text-center"
+                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                        No signals in this filter.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl p-10 text-center"
+                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                      <div className="text-3xl mb-3">✓</div>
+                      <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                        Portfolio looks stable.
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        No ADD, TRIM, or EXIT signals today — all holdings are Monitor (Hold).
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Disclaimer */}
+                  <div className="rounded-xl px-4 py-3 mt-4 flex items-start gap-2"
+                    style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+                    <span className="text-xs mt-0.5 flex-shrink-0" style={{ color: '#60a5fa' }}>ℹ</span>
+                    <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                      <strong style={{ color: '#cbd5e1' }}>AI Perspective only.</strong> Not financial advice. Consult a qualified adviser before acting on any signal.
+                    </p>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
