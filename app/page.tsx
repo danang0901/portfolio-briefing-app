@@ -1145,27 +1145,52 @@ export default function Home() {
         <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>{today}</p>
 
         {/* ── Tabs ── */}
-        <div className="flex gap-1 p-1 rounded-xl mb-6"
+        <div className="flex items-center gap-1 p-1 rounded-xl mb-6"
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-          {([
-            { key: 'briefing',   label: 'Briefing',   icon: <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></> },
-            { key: 'top-picks',  label: 'Top Picks',  icon: <><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/></> },
-            { key: 'picks',      label: 'Picks',      icon: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/> },
-            { key: 'portfolio',  label: 'Portfolio',  icon: <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></> },
-          ] as const).map(({ key, label, icon }) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className="flex-1 py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1"
-              style={tab === key
-                ? { background: 'var(--accent)', color: '#fff' }
-                : { color: 'var(--text-muted)', cursor: 'pointer' }}>
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                {icon}
-              </svg>
-              {label}
-            </button>
-          ))}
+
+          {/* Advisory tab — Today's Picks */}
+          <button
+            onClick={() => setTab('top-picks')}
+            className="flex-none py-2 px-3 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1"
+            style={tab === 'top-picks'
+              ? { background: 'var(--accent)', color: '#fff' }
+              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/>
+            </svg>
+            Today&apos;s Picks
+          </button>
+
+          {/* Separator */}
+          <div className="self-stretch w-px mx-1" style={{ background: 'var(--border)' }} />
+
+          {/* Personal tabs group */}
+          <div className="flex flex-col flex-1 min-w-0">
+            <span className="text-center mb-0.5 tracking-widest uppercase font-medium"
+              style={{ fontSize: '9px', color: 'var(--text-muted)', opacity: 0.6 }}>
+              Your Portfolio
+            </span>
+            <div className="flex gap-1">
+              {([
+                { key: 'briefing',  label: 'Briefing',  icon: <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></> },
+                { key: 'picks',     label: 'Picks',     icon: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/> },
+                { key: 'portfolio', label: 'Portfolio', icon: <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></> },
+              ] as const).map(({ key, label, icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className="flex-1 py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1"
+                  style={tab === key
+                    ? { background: 'var(--accent)', color: '#fff' }
+                    : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    {icon}
+                  </svg>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* ── BRIEFING TAB ── */}
