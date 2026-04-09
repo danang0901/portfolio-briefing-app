@@ -5,6 +5,7 @@ import { validateTicker, validateUnits } from '@/lib/portfolio-validators';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import type { BriefingData, BriefingOverview, StockSignal } from '@/app/api/briefing/route';
+import type { TopPicksData, TopPick, PickCategory } from '@/lib/top-picks-universe';
 
 type Holding = { ticker: string; units: number; market: 'ASX' | 'NASDAQ' | 'NYSE' };
 type HistoryEntry = { time: string; description: string };
@@ -449,11 +450,246 @@ function PicksCard({ stock, price, market = 'ASX' }: {
   );
 }
 
+// ── Top Picks — category styling ─────────────────────────────────────────────
+
+const CATEGORY_STYLE: Record<PickCategory, { color: string; bg: string; border: string; label: string }> = {
+  'HIGHEST CONVICTION': { color: '#a78bfa', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)', label: 'Highest Conviction' },
+  'INCOME & YIELD':     { color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)', label: 'Income & Yield' },
+  'GROWTH CATALYST':    { color: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.25)', label: 'Growth Catalyst' },
+  'DEFENSIVE ANCHOR':   { color: '#94a3b8', bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.22)', label: 'Defensive Anchor' },
+  'SPECULATIVE EDGE':   { color: '#fb923c', bg: 'rgba(251,146,60,0.08)', border: 'rgba(251,146,60,0.25)', label: 'Speculative Edge' },
+};
+
+// ── Top Picks Card ────────────────────────────────────────────────────────────
+
+function TopPicksCard({ pick }: { pick: TopPick }) {
+  const [expanded, setExpanded] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
+  const [citationsOpen, setCitationsOpen] = useState(false);
+
+  const cat = CATEGORY_STYLE[pick.category] ?? CATEGORY_STYLE['HIGHEST CONVICTION'];
+  const signalAccent = ({ ADD: '#22c55e', TRIM: '#fb923c', EXIT: '#f87171' } as Record<string, string>)[pick.signal] ?? '#94a3b8';
+
+  return (
+    <div className="rounded-xl mb-3 overflow-hidden"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+
+      {/* Category header strip */}
+      <div className="px-4 py-2 flex items-center gap-2"
+        style={{ background: cat.bg, borderBottom: `1px solid ${cat.border}` }}>
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cat.color }} />
+        <span className="text-xs font-semibold tracking-wider" style={{ color: cat.color }}>
+          {cat.label.toUpperCase()}
+        </span>
+      </div>
+
+      <div className="p-4">
+        {/* Top row: ticker + market + price direction + signal badge */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>
+              {pick.ticker}
+            </span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded font-medium"
+              style={{ ...(MARKET_STYLE[pick.market] ?? MARKET_STYLE.ASX) }}>
+              {pick.market}
+            </span>
+            <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+              style={{ background: '#1c1917', color: '#a8a29e' }}>
+              {pick.sector}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs font-mono" style={{ color: CONFIDENCE_COLOR[pick.confidence] ?? '#a8a29e' }}>
+              {CONFIDENCE_DOTS[pick.confidence] ?? '○○○'}
+            </span>
+            <span className="text-xs px-2.5 py-1 rounded-full font-bold"
+              style={SIGNAL_STYLE[pick.signal] ?? SIGNAL_STYLE.HOLD}>
+              {pick.signal}
+            </span>
+          </div>
+        </div>
+
+        {/* Time horizon + thesis status row */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-xs px-2 py-0.5 rounded-md font-medium"
+            style={{ background: `${cat.color}15`, color: cat.color, border: `1px solid ${cat.border}` }}>
+            {pick.time_horizon}
+          </span>
+          <span className="text-xs flex items-center gap-1">
+            <span style={{ color: 'var(--text-muted)' }}>Thesis:</span>
+            <span className="font-semibold capitalize"
+              style={{ color: THESIS_STYLE[pick.thesis_status]?.color ?? '#a8a29e' }}>
+              {pick.thesis_status}
+            </span>
+          </span>
+          <span className="text-xs flex items-center gap-1">
+            <span style={{ color: 'var(--text-muted)' }}>Risk:</span>
+            <span style={{ color: RISK_COLOR[pick.risk_change] ?? '#a8a29e' }}>
+              {RISK_ICON[pick.risk_change] ?? '–'}
+            </span>
+          </span>
+        </div>
+
+        {/* Advisory thesis — the "why I'd own this" section */}
+        <div className="rounded-lg px-3 py-2.5 mb-3"
+          style={{ background: `${cat.color}0d`, border: `1px solid ${cat.border}` }}>
+          <p className="text-xs font-semibold mb-1 tracking-wide" style={{ color: cat.color }}>
+            ADVISORY THESIS
+          </p>
+          <p className="text-sm leading-relaxed" style={{ color: '#e2e8f0' }}>
+            {pick.advisory_thesis}
+          </p>
+        </div>
+
+        {/* TA context */}
+        {pick.ta_context && (
+          <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
+            style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(30,58,95,0.5)' }}>
+            {pick.ta_context}
+          </div>
+        )}
+
+        {/* Catalyst — clamped unless expanded */}
+        <p className="text-sm leading-relaxed mb-1.5"
+          style={{
+            color: '#cbd5e1',
+            display: '-webkit-box',
+            WebkitLineClamp: expanded ? undefined : 3,
+            WebkitBoxOrient: 'vertical',
+            overflow: expanded ? 'visible' : 'hidden',
+          } as React.CSSProperties}>
+          {pick.catalyst}
+        </p>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-xs mb-3"
+          style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          {expanded ? '▲ Less' : '▼ More'}
+        </button>
+
+        {/* Expanded details */}
+        {expanded && (
+          <>
+            {pick.upcoming_catalyst && (
+              <div className="flex items-start gap-2 text-xs rounded-lg px-3 py-2 mb-2.5"
+                style={{ background: 'rgba(30,41,59,0.7)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.12)' }}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                </svg>
+                <span>{pick.upcoming_catalyst}</span>
+              </div>
+            )}
+            {pick.what_to_watch && (
+              <div className="flex items-start gap-2 text-xs rounded-lg px-3 py-2 mb-2.5"
+                style={{ background: 'rgba(28,18,7,0.8)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.12)' }}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <span>{pick.what_to_watch}</span>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Bottom row: chart + citations */}
+        <div className="flex items-center gap-2 pt-2.5" style={{ borderTop: '1px solid var(--border)' }}>
+          <button
+            onClick={() => setChartOpen(o => !o)}
+            className="flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5"
+            style={{ color: chartOpen ? '#60a5fa' : 'var(--text-muted)', background: chartOpen ? 'rgba(59,130,246,0.08)' : 'transparent', border: `1px solid ${chartOpen ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            {chartOpen ? 'Hide chart' : 'Chart'}
+          </button>
+          {pick.citations && pick.citations.length > 0 && (
+            <button
+              onClick={() => setCitationsOpen(o => !o)}
+              className="flex items-center gap-1.5 text-xs rounded-lg px-2.5 py-1.5"
+              style={{ color: citationsOpen ? '#60a5fa' : 'var(--text-muted)', background: citationsOpen ? 'rgba(59,130,246,0.08)' : 'transparent', border: `1px solid ${citationsOpen ? 'rgba(59,130,246,0.2)' : 'var(--border)'}`, cursor: 'pointer' }}>
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+              </svg>
+              {pick.citations.length} {pick.citations.length === 1 ? 'source' : 'sources'}
+            </button>
+          )}
+          <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
+            {pick.country}
+          </span>
+        </div>
+
+        {citationsOpen && pick.citations && (
+          <ul className="mt-2.5 space-y-1 pl-3" style={{ borderLeft: `2px solid ${cat.color}40` }}>
+            {pick.citations.map((c, i) => (
+              <li key={i} className="text-xs" style={{ color: 'var(--text-muted)' }}>{c}</li>
+            ))}
+          </ul>
+        )}
+
+        {chartOpen && <TradingViewChart ticker={pick.ticker} market={pick.market} />}
+      </div>
+    </div>
+  );
+}
+
+// ── Blurred placeholder cards for non-signed-in users ────────────────────────
+
+const PLACEHOLDER_PICKS: Partial<TopPick>[] = [
+  { category: 'HIGHEST CONVICTION', ticker: 'NVDA', market: 'NASDAQ', signal: 'ADD', confidence: 'High', time_horizon: '6–12 months', sector: 'Technology', advisory_thesis: 'Placeholder advisory thesis for blurred preview.', catalyst: 'Placeholder catalyst text for preview display only.', ta_context: 'RSI 61 (neutral). MACD bullish. +9.4% vs 200DMA.' },
+  { category: 'INCOME & YIELD',     ticker: 'CBA',  market: 'ASX',    signal: 'HOLD', confidence: 'High', time_horizon: '6–12 months', sector: 'Financials', advisory_thesis: 'Placeholder thesis.', catalyst: 'Placeholder catalyst.', ta_context: 'RSI 54 (neutral). MACD flat. +2.1% vs 200DMA.' },
+  { category: 'GROWTH CATALYST',    ticker: 'AMZN', market: 'NASDAQ', signal: 'ADD',  confidence: 'Medium', time_horizon: '3–6 months', sector: 'Consumer', advisory_thesis: 'Placeholder thesis.', catalyst: 'Placeholder catalyst.', ta_context: 'RSI 58 (neutral). MACD bullish crossover. +5.3% vs 200DMA.' },
+  { category: 'DEFENSIVE ANCHOR',   ticker: 'VAS',  market: 'ASX',    signal: 'HOLD', confidence: 'High', time_horizon: '1–2 years', sector: 'ETF', advisory_thesis: 'Placeholder thesis.', catalyst: 'Placeholder catalyst.', ta_context: 'RSI 50 (neutral). MACD flat. +1.2% vs 200DMA.' },
+  { category: 'SPECULATIVE EDGE',   ticker: 'PLS',  market: 'ASX',    signal: 'ADD',  confidence: 'Low', time_horizon: '1–3 months', sector: 'Materials', advisory_thesis: 'Placeholder thesis.', catalyst: 'Placeholder catalyst.', ta_context: 'RSI 44 (neutral). MACD bearish. -8.2% vs 200DMA.' },
+];
+
+function PlaceholderPickCard({ pick }: { pick: Partial<TopPick> }) {
+  const cat = CATEGORY_STYLE[pick.category as PickCategory] ?? CATEGORY_STYLE['HIGHEST CONVICTION'];
+  return (
+    <div className="rounded-xl mb-3 overflow-hidden"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+      <div className="px-4 py-2 flex items-center gap-2"
+        style={{ background: cat.bg, borderBottom: `1px solid ${cat.border}` }}>
+        <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cat.color }} />
+        <span className="text-xs font-semibold tracking-wider" style={{ color: cat.color }}>
+          {cat.label.toUpperCase()}
+        </span>
+      </div>
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>{pick.ticker}</span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded font-medium"
+              style={{ ...(MARKET_STYLE[pick.market ?? 'ASX'] ?? MARKET_STYLE.ASX) }}>{pick.market}</span>
+            <span className="text-xs px-2 py-0.5 rounded-md" style={{ background: '#1c1917', color: '#a8a29e' }}>{pick.sector}</span>
+          </div>
+          <span className="text-xs px-2.5 py-1 rounded-full font-bold"
+            style={SIGNAL_STYLE[pick.signal ?? 'HOLD'] ?? SIGNAL_STYLE.HOLD}>{pick.signal}</span>
+        </div>
+        <div className="rounded-lg px-3 py-2.5 mb-3"
+          style={{ background: `${cat.color}0d`, border: `1px solid ${cat.border}` }}>
+          <p className="text-xs font-semibold mb-1 tracking-wide" style={{ color: cat.color }}>ADVISORY THESIS</p>
+          <div className="h-10 rounded" style={{ background: 'rgba(255,255,255,0.06)' }} />
+        </div>
+        {pick.ta_context && (
+          <div className="text-xs mb-3 font-mono px-2 py-1.5 rounded"
+            style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(30,58,95,0.5)' }}>
+            {pick.ta_context}
+          </div>
+        )}
+        <div className="h-12 rounded mb-2" style={{ background: 'rgba(255,255,255,0.04)' }} />
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [tab, setTab]                   = useState<'briefing' | 'picks' | 'portfolio'>('briefing');
+  const [tab, setTab]                   = useState<'briefing' | 'top-picks' | 'picks' | 'portfolio'>('briefing');
   const [picksFilter, setPicksFilter]   = useState<'all' | 'add' | 'review'>('all');
+  const [topPicksData, setTopPicksData] = useState<TopPicksData | null>(null);
+  const [topPicksLoading, setTopPicksLoading] = useState(false);
   const [portfolio, setPortfolio]       = useState<Holding[]>(DEFAULT_PORTFOLIO);
   const [history, setHistory]           = useState<HistoryEntry[]>([]);
   const [briefingData, setBriefingData]         = useState<BriefingData | null>(null);
@@ -595,6 +831,19 @@ export default function Home() {
       fetchPrices(holdingsForPrices);
     }
   }, [briefingData, fetchPrices]);
+
+  // ── Fetch top picks when user is signed in ────────────────────────────────
+  useEffect(() => {
+    if (!accessToken || topPicksData) return;
+    setTopPicksLoading(true);
+    fetch('/api/top-picks', { headers: { 'x-access-token': accessToken } })
+      .then(r => r.json())
+      .then((json: { picks: TopPicksData | null; generated_at?: string }) => {
+        if (json.picks) setTopPicksData(json.picks as TopPicksData);
+      })
+      .catch(() => {})
+      .finally(() => setTopPicksLoading(false));
+  }, [accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Countdown to next allowed regeneration (24h from last generated_at)
   useEffect(() => {
@@ -898,39 +1147,25 @@ export default function Home() {
         {/* ── Tabs ── */}
         <div className="flex gap-1 p-1 rounded-xl mb-6"
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-          <button
-            onClick={() => setTab('briefing')}
-            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
-            style={tab === 'briefing'
-              ? { background: 'var(--accent)', color: '#fff' }
-              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
-            </svg>
-            Briefing
-          </button>
-          <button
-            onClick={() => setTab('picks')}
-            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
-            style={tab === 'picks'
-              ? { background: 'var(--accent)', color: '#fff' }
-              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-            </svg>
-            Picks
-          </button>
-          <button
-            onClick={() => setTab('portfolio')}
-            className="flex-1 py-2 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-1.5"
-            style={tab === 'portfolio'
-              ? { background: 'var(--accent)', color: '#fff' }
-              : { color: 'var(--text-muted)', cursor: 'pointer' }}>
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-            </svg>
-            Portfolio
-          </button>
+          {([
+            { key: 'briefing',   label: 'Briefing',   icon: <><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></> },
+            { key: 'top-picks',  label: 'Top Picks',  icon: <><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/></> },
+            { key: 'picks',      label: 'Picks',      icon: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/> },
+            { key: 'portfolio',  label: 'Portfolio',  icon: <><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></> },
+          ] as const).map(({ key, label, icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className="flex-1 py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1"
+              style={tab === key
+                ? { background: 'var(--accent)', color: '#fff' }
+                : { color: 'var(--text-muted)', cursor: 'pointer' }}>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {icon}
+              </svg>
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* ── BRIEFING TAB ── */}
@@ -1272,6 +1507,124 @@ export default function Home() {
                   Searches for current news · generates an AI perspective on each holding · takes ~60s
                 </p>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TOP PICKS TAB ── */}
+        {tab === 'top-picks' && (
+          <div className="animate-fade-in">
+
+            {/* Not signed in — blurred preview + sign-in overlay */}
+            {!user && !authLoading ? (
+              <div className="relative">
+                <div style={{ filter: 'blur(5px)', pointerEvents: 'none', userSelect: 'none' }}>
+                  {PLACEHOLDER_PICKS.map((p, i) => (
+                    <PlaceholderPickCard key={i} pick={p} />
+                  ))}
+                </div>
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6">
+                  <div className="rounded-2xl p-6 text-center w-full max-w-xs"
+                    style={{ background: 'rgba(5,10,20,0.92)', border: '1px solid var(--border)', backdropFilter: 'blur(12px)' }}>
+                    <div className="w-10 h-10 rounded-xl mx-auto mb-3 flex items-center justify-center"
+                      style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)' }}>
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/>
+                      </svg>
+                    </div>
+                    <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                      Sign in to view Top Picks
+                    </p>
+                    <p className="text-xs mb-4 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      Daily advisory recommendations from our AI analyst — 5 high-conviction picks across key categories.
+                    </p>
+                    <button
+                      onClick={signIn}
+                      className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2"
+                      style={{ background: '#f0f6fc', color: '#050a14', cursor: 'pointer', fontWeight: 600 }}>
+                      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+                        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                      </svg>
+                      Sign in with Google
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : topPicksLoading ? (
+              /* Loading state */
+              <div className="flex flex-col items-center justify-center py-16 gap-3">
+                <svg className="animate-spin w-6 h-6" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3"/>
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                </svg>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading today&apos;s picks…</p>
+              </div>
+            ) : !topPicksData ? (
+              /* No picks yet — cron hasn't run */
+              <div className="rounded-xl p-10 text-center"
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                <div className="w-12 h-12 rounded-xl mx-auto mb-4 flex items-center justify-center"
+                  style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)' }}>
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/>
+                  </svg>
+                </div>
+                <p className="text-sm font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  Today&apos;s picks aren&apos;t ready yet.
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  The advisory runs each weekday morning at 7am AEST. Check back then.
+                </p>
+              </div>
+            ) : (
+              /* Picks available */
+              <>
+                {/* Header */}
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs font-semibold tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                      DAILY ADVISORY — TOP 5 PICKS
+                    </p>
+                    <span className="text-xs px-2 py-0.5 rounded"
+                      style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }}>
+                      {new Date(topPicksData.generated_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })} AEST
+                    </span>
+                  </div>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    One high-conviction pick per category — refreshed daily. Not financial advice.
+                  </p>
+                </div>
+
+                {/* Market overview */}
+                {topPicksData.market_overview && (
+                  <div className="rounded-xl p-4 mb-4"
+                    style={{ background: '#0f0f23', border: '1px solid #312e81' }}>
+                    <p className="text-xs font-semibold tracking-wider mb-2" style={{ color: '#818cf8' }}>
+                      MARKET REGIME
+                    </p>
+                    <p className="text-sm leading-relaxed" style={{ color: '#e0e7ff' }}>
+                      {topPicksData.market_overview}
+                    </p>
+                  </div>
+                )}
+
+                {/* Pick cards */}
+                {topPicksData.picks.map(pick => (
+                  <TopPicksCard key={pick.ticker} pick={pick} />
+                ))}
+
+                {/* Disclaimer */}
+                <div className="rounded-xl px-4 py-3 mt-2 flex items-start gap-2"
+                  style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+                  <span className="text-xs mt-0.5 flex-shrink-0" style={{ color: '#60a5fa' }}>ℹ</span>
+                  <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                    <strong style={{ color: '#cbd5e1' }}>AI Perspective only.</strong> These picks are generated by an AI advisory and are for informational purposes only. They do not constitute financial advice. Always consult a qualified financial adviser before investing.
+                  </p>
+                </div>
+              </>
             )}
           </div>
         )}

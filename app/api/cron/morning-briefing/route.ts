@@ -9,8 +9,9 @@ import {
   sortCards,
 } from '@/lib/email-template';
 import type { StockSignal, BriefingOverview } from '@/app/api/briefing/route';
+import { generateTopPicks } from '@/lib/generate-top-picks';
 
-export const maxDuration = 300; // 5 min — allow for multiple users
+export const maxDuration = 300; // 5 min — allow for multiple users + top picks generation
 
 // Vercel cron schedule (vercel.json): "0 21 * * 0-4"
 // That's 21:00 UTC Sun–Thu = 07:00 AEST Mon–Fri. No weekend sends.
@@ -77,6 +78,44 @@ export async function GET(req: Request) {
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
+
+  const today = new Date().toLocaleDateString('en-AU', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    timeZone: 'Australia/Sydney',
+  });
+
+  // ── Generate Top Picks (once per day, shared across all users) ────────────
+  let topPicksGenerated = false;
+  try {
+    // Check if picks already exist for today
+    const { data: existingPicks } = await admin
+      .from('top_picks')
+      .select('id')
+      .gte('generated_at', todayStart.toISOString())
+      .limit(1)
+      .single();
+
+    if (!existingPicks) {
+      console.log('[cron] Generating daily top picks…');
+      const picksData = await generateTopPicks(today);
+      const { error: picksErr } = await admin.from('top_picks').insert({
+        picks_data:   picksData,
+        generated_at: picksData.generated_at,
+      });
+      if (picksErr) {
+        console.error('[cron] Top picks insert error:', picksErr.message);
+      } else {
+        topPicksGenerated = true;
+        console.log('[cron] Top picks generated and stored.');
+      }
+    } else {
+      console.log('[cron] Top picks already exist for today — skipping generation.');
+      topPicksGenerated = true;
+    }
+  } catch (picksErr) {
+    console.error('[cron] Top picks generation failed:', picksErr instanceof Error ? picksErr.message : String(picksErr));
+    // Non-fatal — continue with per-user briefings
+  }
 
   let generated = 0;
   let skipped   = 0;
@@ -218,5 +257,5 @@ export async function GET(req: Request) {
     `[cron] Morning briefing complete — generated: ${generated}, skipped: ${skipped}, emailed: ${emailed}, errors: ${errors.length}`,
   );
 
-  return NextResponse.json({ generated, skipped, emailed, errors });
+  return NextResponse.json({ generated, skipped, emailed, errors, topPicksGenerated });
 }
