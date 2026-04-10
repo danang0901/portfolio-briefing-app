@@ -31,14 +31,16 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
   }
 
-  // Fetch today's picks (latest row from today)
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  // Fetch the most recent picks within the last 28 hours.
+  // Using UTC midnight would drop picks generated at 21:00 UTC (= 7am AEST)
+  // once the UTC date rolls over, leaving Australian users with blank picks
+  // for most of the trading day.
+  const cutoff = new Date(Date.now() - 28 * 60 * 60 * 1000);
 
   const { data, error } = await userClient
     .from('top_picks')
     .select('picks_data, generated_at')
-    .gte('generated_at', todayStart.toISOString())
+    .gte('generated_at', cutoff.toISOString())
     .order('generated_at', { ascending: false })
     .limit(1)
     .single();
