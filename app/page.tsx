@@ -751,6 +751,7 @@ export default function Home() {
         if (!currentUser) return;
 
         // Load portfolio from Supabase (also checks email_briefing_enabled for opt-in)
+        let coerced: Holding[] = portfolioRef.current;
         const { data: portData } = await supabase
           .from('portfolios')
           .select('holdings, email_briefing_enabled')
@@ -759,7 +760,7 @@ export default function Home() {
 
         if (portData != null && Array.isArray(portData.holdings) && portData.holdings.length > 0) {
           // Coerce legacy holdings without market field to ASX
-          const coerced = portData.holdings.map((h: Partial<Holding>) => ({ ...h, market: h.market ?? 'ASX' })) as Holding[];
+          coerced = portData.holdings.map((h: Partial<Holding>) => ({ ...h, market: h.market ?? 'ASX' })) as Holding[];
           setPortfolio(coerced);
         } else {
           await supabase.from('portfolios').upsert({
