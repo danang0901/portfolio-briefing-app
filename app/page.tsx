@@ -275,13 +275,7 @@ function StockCard({ stock, price, market = 'ASX', beginnerView = true }: {
 
         {/* Technical analysis — shown in both modes */}
         {stock.ta_context && (
-          <div className="text-xs mb-3 font-mono px-3 py-2 rounded-lg flex items-start gap-2"
-            style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(59,130,246,0.12)' }}>
-            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: '#3b82f6' }}>
-              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
-            </svg>
-            {stock.ta_context}
-          </div>
+          <TechnicalBar taContext={stock.ta_context} ticker={stock.ticker} />
         )}
 
         {/* Catalyst — main text */}
@@ -702,6 +696,137 @@ const PROFILE_LABEL: Record<string, string> = {
   'GROWTH': 'growth',
   'SPECULATIVE': 'speculative',
 };
+
+// ── TechnicalBar — RSI meter + DMA badge (replaces ta_context prose) ──────────
+
+function TechnicalBar({ taContext, ticker }: { taContext: string; ticker: string }) {
+  const rsiMatch = taContext.match(/RSI[:\s]+(\d+(?:\.\d+)?)/i);
+  const dmaMatch = taContext.match(/([+-]?\d+(?:\.\d+)?)%.*?200[-\s]?d/i);
+
+  if (!rsiMatch && !dmaMatch) {
+    // Parse miss — fall back to prose
+    console.log(`[TechnicalBar] parse miss: ${ticker}`);
+    return (
+      <div className="text-xs mb-3 font-mono px-3 py-2 rounded-lg flex items-start gap-2"
+        style={{ background: 'rgba(15,23,42,0.8)', color: '#7dd3fc', border: '1px solid rgba(59,130,246,0.12)' }}>
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1, color: '#3b82f6' }}>
+          <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+        </svg>
+        {taContext}
+      </div>
+    );
+  }
+
+  const rsi = rsiMatch ? parseFloat(rsiMatch[1]) : null;
+  const dma = dmaMatch ? parseFloat(dmaMatch[1]) : null;
+
+  let rsiColor = '#64748b';
+  let rsiLabel = 'Neutral';
+  if (rsi !== null) {
+    if (rsi < 30) { rsiColor = '#4ade80'; rsiLabel = 'Oversold'; }
+    else if (rsi >= 70) { rsiColor = '#f59e0b'; rsiLabel = 'Overbought'; }
+  }
+
+  const dmaAbove = dma !== null && dma >= 0;
+
+  return (
+    <div className="mb-3 px-3 py-2.5 rounded-lg"
+      style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(59,130,246,0.12)' }}>
+      {rsi !== null && (
+        <div className="mb-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-mono" style={{ color: '#7dd3fc' }}>RSI</span>
+            <span className="text-xs font-mono font-semibold" style={{ color: rsiColor }}>{Math.round(rsi)} · {rsiLabel}</span>
+          </div>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(100,116,139,0.25)' }}>
+            <div className="h-full rounded-full transition-all"
+              style={{ width: `${Math.min(100, Math.max(0, rsi))}%`, background: rsiColor }} />
+          </div>
+        </div>
+      )}
+      {dma !== null && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-mono" style={{ color: '#7dd3fc' }}>200D</span>
+          <span className="text-xs font-mono font-semibold" style={{ color: dmaAbove ? '#4ade80' : '#f87171' }}>
+            {dmaAbove ? '↑' : '↓'} {dma > 0 ? '+' : ''}{dma.toFixed(1)}%
+          </span>
+          <span className="text-xs" style={{ color: '#475569' }}>vs 200-day MA</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── TextBarChart — horizontal bars parsed from sector/region text ──────────────
+
+function TextBarChart({ text, fieldName }: { text: string; fieldName: string }) {
+  const entries: Array<{ label: string; value: number }> = [];
+  const re = /(\w[\w\s]+?)\s+(?:at\s+)?(\d+)%/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const label = m[1].trim().replace(/\s+/g, ' ');
+    const value = parseInt(m[2], 10);
+    if (label.length > 0 && value > 0 && value <= 100) {
+      entries.push({ label, value });
+    }
+  }
+
+  if (entries.length === 0) {
+    console.log(`[TextBarChart] parse miss: ${fieldName}`);
+    return <p className="text-sm leading-relaxed" style={{ color: '#cbd5e1' }}>{text}</p>;
+  }
+
+  const max = Math.max(...entries.map(e => e.value));
+
+  return (
+    <div className="space-y-1.5">
+      {entries.map((e, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="text-xs w-24 shrink-0 truncate" style={{ color: '#94a3b8' }}>{e.label}</span>
+          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(100,116,139,0.2)' }}>
+            <div className="h-full rounded-full" style={{ width: `${(e.value / max) * 100}%`, background: '#3b82f6' }} />
+          </div>
+          <span className="text-xs font-mono w-8 text-right shrink-0" style={{ color: '#60a5fa' }}>{e.value}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── CompactDisclaimer — single-line notice with expandable popover ─────────────
+
+function CompactDisclaimer() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative rounded-xl px-4 py-2.5 mb-4 flex items-center gap-2"
+      style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+      <span className="text-xs" style={{ color: '#60a5fa', flexShrink: 0 }}>ⓘ</span>
+      <p className="text-xs flex-1" style={{ color: '#94a3b8' }}>
+        AI perspective only — not financial advice
+      </p>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="text-xs px-1.5 py-0.5 rounded opacity-60 hover:opacity-100 transition-opacity shrink-0"
+        style={{ color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }}
+        aria-label="Full disclaimer">
+        ?
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 right-0 z-10 rounded-xl px-4 py-3 shadow-xl"
+          style={{ top: 'calc(100% + 4px)', background: '#0f172a', border: '1px solid #1e3a5f' }}
+          onClick={e => e.stopPropagation()}>
+          <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+            <strong style={{ color: '#cbd5e1' }}>AI Perspective only.</strong> This briefing is generated by an AI analyst and is for informational purposes. It does not constitute financial advice. Always consult a qualified financial adviser before making investment decisions.
+          </p>
+          <button onClick={() => setOpen(false)} className="mt-2 text-xs underline opacity-60 hover:opacity-100" style={{ color: '#60a5fa' }}>
+            Close
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ProfileTrustSignal({ profile }: { profile: InvestorProfile }) {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -1445,13 +1570,7 @@ export default function Home() {
                 )}
 
                 {/* ── Disclaimer banner ── */}
-                <div className="rounded-xl px-4 py-3 mb-4 flex items-start gap-2"
-                  style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
-                  <span className="text-xs mt-0.5" style={{ color: '#60a5fa', flexShrink: 0 }}>ℹ</span>
-                  <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
-                    <strong style={{ color: '#cbd5e1' }}>AI Perspective only.</strong> This briefing is generated by an AI analyst and is for informational purposes. It does not constitute financial advice. Always consult a qualified financial adviser before making investment decisions.
-                  </p>
-                </div>
+                <CompactDisclaimer />
 
                 {/* ── Executive Summary ── */}
                 {briefingData.overview.executive_summary && (
@@ -1571,21 +1690,28 @@ export default function Home() {
                   </div>
                   <div style={{ background: 'var(--bg-card)' }}>
                     {[
-                      { key: 'sector_breakdown', label: 'Sectors'  },
-                      { key: 'region_exposure',   label: 'Regions'  },
-                      { key: 'risk_profile',      label: 'Risk'     },
-                      { key: 'macro_note',        label: 'Macro'    },
-                    ].map(({ key, label }, idx, arr) => (
-                      <div key={key} className="px-4 py-3"
-                        style={{ borderBottom: idx < arr.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                        <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>
-                          {label}
-                        </p>
-                        <p className="text-sm leading-relaxed" style={{ color: '#cbd5e1' }}>
-                          {briefingData.overview[key as keyof typeof briefingData.overview] as string}
-                        </p>
-                      </div>
-                    ))}
+                      { key: 'sector_breakdown', label: 'Sectors',  visual: true  },
+                      { key: 'region_exposure',   label: 'Regions',  visual: true  },
+                      { key: 'risk_profile',      label: 'Risk',     visual: false },
+                      { key: 'macro_note',        label: 'Macro',    visual: false },
+                    ].map(({ key, label, visual }, idx, arr) => {
+                      const value = briefingData.overview[key as keyof typeof briefingData.overview] as string;
+                      return (
+                        <div key={key} className="px-4 py-3"
+                          style={{ borderBottom: idx < arr.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <p className="text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                            {label}
+                          </p>
+                          {visual ? (
+                            <TextBarChart text={value} fieldName={key} />
+                          ) : (
+                            <p className="text-sm leading-relaxed" style={{ color: '#cbd5e1' }}>
+                              {value}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
