@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
-import { generateBriefing } from '@/lib/briefing-generator';
-import type { Holding } from '@/lib/briefing-generator';
+import { generateBriefing, classifyPortfolio } from '@/lib/briefing-generator';
+import type { Holding, InvestorProfile } from '@/lib/briefing-generator';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 90;
@@ -53,13 +53,14 @@ export type BriefingData = {
   overview: BriefingOverview;
   generated_at: string;
   news_sourced: boolean;
+  investor_profile?: InvestorProfile;
 };
 
 type StreamEvent =
   | { type: 'progress'; message: string }
   | { type: 'stock'; data: StockSignal }
   | { type: 'overview'; data: BriefingOverview }
-  | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number }
+  | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number; investor_profile?: InvestorProfile }
   | { type: 'error'; message: string };
 
 function portfolioHash(holdings: Holding[]): string {
@@ -112,6 +113,8 @@ export async function POST(req: Request) {
         if (cachedHash === pHash) {
           console.log('[briefing] Cache hit — serving stored briefing');
           const briefing = cached.briefing_data as BriefingData;
+          // Re-classify from current holdings — zero cost, handles portfolio drift
+          const investorProfile = briefing.investor_profile ?? classifyPortfolio(holdings);
           const encoder = new TextEncoder();
           const stream = new ReadableStream({
             start(controller) {
@@ -123,7 +126,7 @@ export async function POST(req: Request) {
                   JSON.stringify({ type: 'overview', data: briefing.overview }) + '\n'
                 ));
                 controller.enqueue(encoder.encode(
-                  JSON.stringify({ type: 'done', generated_at: briefing.generated_at, news_sourced: briefing.news_sourced, from_cache: true }) + '\n'
+                  JSON.stringify({ type: 'done', generated_at: briefing.generated_at, news_sourced: briefing.news_sourced, from_cache: true, investor_profile: investorProfile }) + '\n'
                 ));
               } catch (e) {
                 controller.enqueue(encoder.encode(
@@ -207,7 +210,7 @@ export async function POST(req: Request) {
           }
         }
 
-        emit({ type: 'done', generated_at: briefing.generated_at, news_sourced: briefing.news_sourced, from_cache: false, signal_count: signalCount });
+        emit({ type: 'done', generated_at: briefing.generated_at, news_sourced: briefing.news_sourced, from_cache: false, signal_count: signalCount, investor_profile: briefing.investor_profile });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error('[briefing] Stream error:', message);

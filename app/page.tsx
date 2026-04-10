@@ -5,6 +5,7 @@ import { validateTicker, validateUnits } from '@/lib/portfolio-validators';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import type { BriefingData, BriefingOverview, StockSignal } from '@/app/api/briefing/route';
+import type { InvestorProfile } from '@/lib/briefing-generator';
 import type { TopPicksData, TopPick, PickCategory } from '@/lib/top-picks-universe';
 
 type Holding = { ticker: string; units: number; market: 'ASX' | 'NASDAQ' | 'NYSE' };
@@ -694,6 +695,43 @@ function PlaceholderPickCard({ pick }: { pick: Partial<TopPick> }) {
   );
 }
 
+// ── Investor Profile Trust Signal ─────────────────────────────────────────────
+
+const PROFILE_LABEL: Record<string, string> = {
+  'INCOME-FOCUSED': 'income-focused',
+  'GROWTH': 'growth',
+  'SPECULATIVE': 'speculative',
+};
+
+function ProfileTrustSignal({ profile }: { profile: InvestorProfile }) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const label = PROFILE_LABEL[profile] ?? profile.toLowerCase();
+  return (
+    <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs"
+        style={{ background: 'rgba(99,102,241,0.1)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.2)' }}>
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        Briefing tuned for {label} investors
+        <button
+          onClick={() => setShowTooltip(v => !v)}
+          className="ml-0.5 opacity-60 hover:opacity-100 transition-opacity"
+          aria-label="What does this mean?">
+          [?]
+        </button>
+      </div>
+      {showTooltip && (
+        <div className="absolute z-10 mt-8 ml-2 max-w-xs rounded-xl px-4 py-3 text-xs leading-relaxed shadow-xl"
+          style={{ background: '#1e1b4b', color: '#c7d2fe', border: '1px solid rgba(99,102,241,0.3)' }}>
+          We infer your investor profile from your portfolio composition. This shapes how we frame signals — not which stocks we cover.
+          <button onClick={() => setShowTooltip(false)} className="block mt-2 underline opacity-70">Close</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -920,6 +958,7 @@ export default function Home() {
     let generatedAt = '';
     let newsSourced = false;
     let fromCache = false;
+    let investorProfile: InvestorProfile | undefined;
 
     try {
       const res = await fetch('/api/briefing', {
@@ -963,7 +1002,7 @@ export default function Home() {
               | { type: 'progress'; message: string }
               | { type: 'stock'; data: StockSignal }
               | { type: 'overview'; data: BriefingOverview }
-              | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number }
+              | { type: 'done'; generated_at: string; news_sourced: boolean; from_cache: boolean; signal_count?: number; investor_profile?: InvestorProfile }
               | { type: 'error'; message: string };
 
             if (event.type === 'progress') {
@@ -977,6 +1016,7 @@ export default function Home() {
               generatedAt = event.generated_at;
               newsSourced = event.news_sourced;
               fromCache = event.from_cache;
+              investorProfile = event.investor_profile;
               if (event.signal_count != null) setSignalCount(event.signal_count);
             } else if (event.type === 'error') {
               throw new Error(event.message);
@@ -998,6 +1038,7 @@ export default function Home() {
         overview: accumulatedOverview,
         generated_at: generatedAt || new Date().toISOString(),
         news_sourced: newsSourced,
+        investor_profile: investorProfile,
       };
 
       setBriefingData(briefing);
@@ -1388,6 +1429,11 @@ export default function Home() {
                     </span>
                   )}
                 </div>
+
+                {/* ── Investor profile trust signal ── */}
+                {briefingData.investor_profile && briefingData.investor_profile !== 'BALANCED' && (
+                  <ProfileTrustSignal profile={briefingData.investor_profile} />
+                )}
 
                 {/* ── Disclaimer banner ── */}
                 <div className="rounded-xl px-4 py-3 mb-4 flex items-start gap-2"

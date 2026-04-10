@@ -10,11 +10,74 @@ import Anthropic from '@anthropic-ai/sdk';
 import { formatTA } from '@/lib/technical-indicators';
 import { getCachedTA, getCachedASXAnnouncements, getCachedStocktwitsSentiment } from '@/lib/ticker-cache';
 import { buildEconomicCalendar } from '@/lib/economic-calendar';
+import { SECTOR_MAP, type SectorProfile } from '@/lib/sector-map';
 import type { StockSignal, BriefingOverview, BriefingData } from '@/app/api/briefing/route';
 
 const client = new Anthropic();
 
 export type Holding = { ticker: string; units: number; market?: 'ASX' | 'NASDAQ' | 'NYSE' };
+
+export type InvestorProfile = 'INCOME-FOCUSED' | 'GROWTH' | 'SPECULATIVE' | 'BALANCED';
+
+/**
+ * Infers investor profile from holdings composition using static SECTOR_MAP.
+ *
+ * Precedence (first match wins):
+ *  1. SPECULATIVE  — >30% of holdings are 'speculative', OR any single
+ *                    speculative position is >40% of total units
+ *  2. GROWTH       — >40% of holdings are 'growth'
+ *  3. INCOME-FOCUSED — >50% of holdings are 'income', OR (ASX market
+ *                    majority AND >40% are banks/telcos/REITs)
+ *  4. BALANCED     — fallthrough
+ *
+ * Tickers not in SECTOR_MAP default to 'neutral' (no profile signal).
+ */
+export function classifyPortfolio(holdings: Holding[]): InvestorProfile {
+  if (holdings.length === 0) return 'BALANCED';
+
+  const totalUnits = holdings.reduce((sum, h) => sum + h.units, 0);
+  if (totalUnits === 0) return 'BALANCED';
+
+  const counts: Record<SectorProfile, number> = { income: 0, growth: 0, speculative: 0, neutral: 0 };
+  const unitsByProfile: Record<SectorProfile, number> = { income: 0, growth: 0, speculative: 0, neutral: 0 };
+
+  for (const h of holdings) {
+    // BRK-B ticker normalisation — hyphen variant
+    const key = h.ticker === 'BRK-B' ? 'BRK_B' : h.ticker;
+    const profile = SECTOR_MAP[key] ?? 'neutral';
+    counts[profile]++;
+    unitsByProfile[profile] += h.units;
+  }
+
+  const n = holdings.length;
+
+  // 1. SPECULATIVE
+  const spectFraction = counts.speculative / n;
+  const maxSpecUnitsFraction = Math.max(
+    ...holdings
+      .filter(h => (SECTOR_MAP[h.ticker === 'BRK-B' ? 'BRK_B' : h.ticker] ?? 'neutral') === 'speculative')
+      .map(h => h.units / totalUnits),
+    0,
+  );
+  if (spectFraction > 0.3 || maxSpecUnitsFraction > 0.4) return 'SPECULATIVE';
+
+  // 2. GROWTH
+  if (counts.growth / n > 0.4) return 'GROWTH';
+
+  // 3. INCOME-FOCUSED
+  const isASXMajority = holdings.filter(h => (h.market ?? 'ASX') === 'ASX').length > holdings.length / 2;
+  if (counts.income / n > 0.5) return 'INCOME-FOCUSED';
+  if (isASXMajority && counts.income / n > 0.4) return 'INCOME-FOCUSED';
+
+  return 'BALANCED';
+}
+
+const PROFILE_GUIDANCE: Record<InvestorProfile, string> = {
+  'INCOME-FOCUSED': `Emphasise dividend sustainability, franking credits (ASX holdings), yield vs. sector peers, and payout ratio trends. Frame signals through an income lens — e.g. "yield anchor", "distribution at risk", "franking advantage". De-emphasise short-term price momentum unless it directly threatens income.`,
+  'GROWTH': `Emphasise revenue trajectory, total addressable market, competitive moat, and reinvestment rate. Note dividend yield only if it signals capital allocation concern or a value opportunity. Frame signals through a compounding lens — e.g. "growth runway", "re-rating potential", "margin expansion thesis".`,
+  'SPECULATIVE': `Emphasise catalyst timing, downside risk, and position sizing. Include explicit risk warnings for any position representing >15% of total portfolio units. Frame signals through a risk/reward lens — e.g. "asymmetric upside if catalyst lands", "binary outcome risk". Be direct about which positions carry the most risk.`,
+  'BALANCED': `Apply standard balanced analysis. No emphasis adjustment. Cover income, growth, and risk dimensions proportionally across holdings.`,
+};
 
 const OUTPUT_SCHEMA = `{
   "stocks": [
@@ -92,9 +155,12 @@ export async function generateBriefing(
     onProgress?: (msg: string) => void;
     onStock?: (stock: StockSignal) => void;
   },
-): Promise<BriefingData> {
+): Promise<BriefingData & { investor_profile: InvestorProfile }> {
   const onProgress = callbacks?.onProgress ?? (() => {});
   const onStock    = callbacks?.onStock    ?? (() => {});
+
+  // Classify portfolio before any API calls — zero extra cost
+  const investorProfile = classifyPortfolio(holdings);
 
   const today = new Date().toLocaleDateString('en-AU', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -186,6 +252,11 @@ Signal definitions:
 - TRIM: Reduce — thesis weakening, risk increased, or position oversized
 - EXIT: Close — thesis broken or investment case fundamentally changed
 
+─────────────────────────────────────────────
+INVESTOR PROFILE: ${investorProfile}
+─────────────────────────────────────────────
+${PROFILE_GUIDANCE[investorProfile]}
+
 Return ONLY valid JSON (no markdown, no code fences) matching this exact structure:
 ${OUTPUT_SCHEMA}`;
 
@@ -258,9 +329,10 @@ ${OUTPUT_SCHEMA}`;
   }
 
   return {
-    stocks:       result.stocks,
-    overview:     result.overview,
-    generated_at: new Date().toISOString(),
-    news_sourced: newsSourced,
+    stocks:           result.stocks,
+    overview:         result.overview,
+    generated_at:     new Date().toISOString(),
+    news_sourced:     newsSourced,
+    investor_profile: investorProfile,
   };
 }
