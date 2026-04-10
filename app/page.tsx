@@ -809,7 +809,9 @@ export default function Home() {
         }
 
         // NULL = never asked → show opt-in modal
-        if (portData?.email_briefing_enabled == null) {
+        // Use strict equality: undefined (no row / query failed) must NOT trigger the modal,
+        // only an explicit null in the DB column means "not yet asked".
+        if (portData?.email_briefing_enabled === null) {
           setShowEmailOptIn(true);
         }
 
@@ -937,13 +939,20 @@ export default function Home() {
   }
 
   async function signOut() {
-    await supabase.auth.signOut();
+    // Clear local state immediately — do not wait for the API call.
+    // This gives instant visual feedback and prevents the modal from
+    // blocking the header if showEmailOptIn was true.
     setUser(null);
     setAccessToken('');
     setPortfolio(DEFAULT_PORTFOLIO);
     setBriefingData(null);
+    setShowEmailOptIn(false);
+    setSignalCount(null);
+    setTopPicksData(null);
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(BRIEFING_KEY);
+    // Invalidate server-side session in the background
+    supabase.auth.signOut().catch(() => {});
   }
 
   // ── Generate briefing (streaming) ─────────────────────────────────────────
@@ -2013,7 +2022,8 @@ export default function Home() {
       {/* ── Email opt-in modal ── */}
       {showEmailOptIn && (
         <div className="fixed inset-0 z-50 flex items-end justify-center pb-6 px-4"
-          style={{ background: 'rgba(0,0,0,0.7)' }}>
+          style={{ background: 'rgba(0,0,0,0.7)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowEmailOptIn(false); }}>
           <div className="w-full max-w-sm rounded-2xl p-6"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
             <p className="text-base font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
