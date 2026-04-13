@@ -5,6 +5,7 @@ import { validateTicker, validateUnits } from '@/lib/portfolio-validators';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { User } from '@supabase/supabase-js';
 import type { BriefingData, BriefingOverview, StockSignal } from '@/app/api/briefing/route';
+import type { TopPicksData, TopPick, PickCategory } from '@/lib/top-picks-universe';
 
 type Holding = { ticker: string; units: number; market: 'ASX' | 'NASDAQ' | 'NYSE' };
 type HistoryEntry = { time: string; description: string };
@@ -48,6 +49,16 @@ const RISK_COLOR: Record<string, string> = {
   increased:  '#f87171',
   decreased:  '#4ade80',
   unchanged:  '#a8a29e',
+};
+
+// ── Top Picks — category styling ─────────────────────────────────────────────
+
+const CATEGORY_STYLE: Record<PickCategory, { color: string; bg: string; border: string; label: string }> = {
+  'HIGHEST CONVICTION': { color: '#a78bfa', bg: 'rgba(139,92,246,0.08)', border: 'rgba(139,92,246,0.25)', label: 'Highest Conviction' },
+  'INCOME & YIELD':     { color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)', label: 'Income & Yield' },
+  'GROWTH CATALYST':    { color: '#60a5fa', bg: 'rgba(96,165,250,0.08)', border: 'rgba(96,165,250,0.25)', label: 'Growth Catalyst' },
+  'DEFENSIVE ANCHOR':   { color: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', label: 'Defensive Anchor' },
+  'SPECULATIVE EDGE':   { color: '#f87171', bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.25)', label: 'Speculative Edge' },
 };
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
@@ -256,10 +267,180 @@ function StockCard({ stock, price, market = 'ASX' }: { stock: StockSignal; price
   );
 }
 
+// ── Top Picks Card ────────────────────────────────────────────────────────────
+
+function TopPicksCard({ pick }: { pick: TopPick }) {
+  const [expanded, setExpanded] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
+  const [citationsOpen, setCitationsOpen] = useState(false);
+  const cat = CATEGORY_STYLE[pick.category];
+  const symbol = `${pick.market}:${pick.ticker}`;
+
+  return (
+    <div className="rounded-xl mb-3 overflow-hidden"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+      {/* Category bar */}
+      <div className="px-4 py-1.5 flex items-center gap-2"
+        style={{ background: cat.bg, borderBottom: `1px solid ${cat.border}` }}>
+        <span className="text-xs font-semibold tracking-wider" style={{ color: cat.color }}>
+          {cat.label.toUpperCase()}
+        </span>
+      </div>
+
+      {/* Main content */}
+      <div className="p-4">
+        {/* Top row: ticker + signal */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>
+              {pick.ticker}
+            </span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded"
+              style={{ background: '#1c1917', color: '#a8a29e' }}>
+              {pick.market}
+            </span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{pick.sector}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs px-2 py-0.5 rounded font-semibold"
+              style={SIGNAL_STYLE[pick.signal]}>
+              {pick.signal}
+            </span>
+            <span className="text-xs font-mono" style={{ color: CONFIDENCE_COLOR[pick.confidence] }}>
+              {CONFIDENCE_DOTS[pick.confidence]}
+            </span>
+          </div>
+        </div>
+
+        {/* Advisory thesis */}
+        <p className="text-sm leading-relaxed mb-2" style={{ color: '#d1d5db' }}>
+          {pick.advisory_thesis}
+        </p>
+
+        {/* Metadata row */}
+        <div className="flex items-center gap-3 mb-2 flex-wrap">
+          <span className="text-xs px-2 py-0.5 rounded"
+            style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }}>
+            {pick.time_horizon}
+          </span>
+          <span className="text-xs" style={{ color: THESIS_STYLE[pick.thesis_status]?.color }}>
+            thesis {pick.thesis_status}
+          </span>
+          <span className="text-xs" style={{ color: RISK_COLOR[pick.risk_change] }}>
+            risk {RISK_ICON[pick.risk_change]}
+          </span>
+        </div>
+
+        {/* Expand toggle */}
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-xs mt-1"
+          style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          {expanded ? '▲ Less' : '▼ More detail'}
+        </button>
+
+        {expanded && (
+          <div className="mt-3 space-y-2 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+            <div>
+              <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>CATALYST</p>
+              <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>{pick.catalyst}</p>
+            </div>
+            {pick.ta_context && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>TECHNICALS</p>
+                <p className="text-sm font-mono" style={{ color: '#94a3b8' }}>{pick.ta_context}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>NEXT CATALYST</p>
+              <p className="text-sm" style={{ color: '#d1d5db' }}>{pick.upcoming_catalyst}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium mb-1" style={{ color: '#f87171' }}>WATCH</p>
+              <p className="text-sm" style={{ color: '#d1d5db' }}>{pick.what_to_watch}</p>
+            </div>
+
+            {/* Chart + citations toggles */}
+            <div className="flex gap-3 pt-1">
+              <button onClick={() => setChartOpen(c => !c)}
+                className="text-xs" style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                {chartOpen ? '▲ Hide chart' : '▼ Chart'}
+              </button>
+              {pick.citations && pick.citations.length > 0 && (
+                <button onClick={() => setCitationsOpen(c => !c)}
+                  className="text-xs" style={{ color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+                  {citationsOpen ? '▲ Hide sources' : `▼ ${pick.citations.length} source${pick.citations.length !== 1 ? 's' : ''}`}
+                </button>
+              )}
+            </div>
+
+            {chartOpen && (
+              <div style={{ borderRadius: '8px', overflow: 'hidden', marginTop: '8px' }}>
+                <iframe
+                  src={`https://www.tradingview.com/widgetembed/?symbol=${symbol}&interval=D&theme=dark&style=1&hide_side_toolbar=1&allow_symbol_change=0&save_image=0&calendar=0&hotlist=0&details=0&hide_top_toolbar=0&hide_legend=0`}
+                  width="100%"
+                  height="260"
+                  frameBorder="0"
+                  title={`${pick.ticker} chart`}
+                  style={{ display: 'block' }}
+                />
+              </div>
+            )}
+
+            {citationsOpen && pick.citations && (
+              <div className="rounded-lg p-3 space-y-1.5"
+                style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+                {pick.citations.map((c, i) => (
+                  <p key={i} className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>{c}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Placeholder cards for non-signed-in users ─────────────────────────────────
+
+const PLACEHOLDER_PICKS: Partial<TopPick>[] = [
+  { category: 'HIGHEST CONVICTION', ticker: 'BHP',  market: 'ASX',    signal: 'ADD',  confidence: 'High',   time_horizon: '6–12 months', sector: 'Materials',   advisory_thesis: 'Sign in to see today\'s highest-conviction ASX pick with full thesis.' },
+  { category: 'INCOME & YIELD',     ticker: 'CBA',  market: 'ASX',    signal: 'HOLD', confidence: 'High',   time_horizon: '6–12 months', sector: 'Financials',  advisory_thesis: 'Sign in to see the best income play on the ASX today.' },
+  { category: 'GROWTH CATALYST',    ticker: 'NVDA', market: 'NASDAQ', signal: 'ADD',  confidence: 'High',   time_horizon: '3–6 months',  sector: 'Technology',  advisory_thesis: 'Sign in to see the top NASDAQ growth pick with live catalyst data.' },
+  { category: 'DEFENSIVE ANCHOR',   ticker: 'VAS',  market: 'ASX',    signal: 'HOLD', confidence: 'Medium', time_horizon: '1–2 years',   sector: 'ETF',         advisory_thesis: 'Sign in to see the defensive pick for the current market regime.' },
+  { category: 'SPECULATIVE EDGE',   ticker: 'PLTR', market: 'NASDAQ', signal: 'ADD',  confidence: 'Low',    time_horizon: '1–3 months',  sector: 'Technology',  advisory_thesis: 'Sign in to see the asymmetric NASDAQ speculative play.' },
+];
+
+function PlaceholderPickCard({ pick }: { pick: Partial<TopPick> }) {
+  const cat = CATEGORY_STYLE[pick.category as PickCategory] ?? CATEGORY_STYLE['HIGHEST CONVICTION'];
+  return (
+    <div className="rounded-xl mb-3 overflow-hidden"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+      <div className="px-4 py-1.5" style={{ background: cat.bg, borderBottom: `1px solid ${cat.border}` }}>
+        <span className="text-xs font-semibold tracking-wider" style={{ color: cat.color }}>
+          {cat.label.toUpperCase()}
+        </span>
+      </div>
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-bold text-base" style={{ color: 'var(--text-primary)' }}>{pick.ticker}</span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: '#1c1917', color: '#a8a29e' }}>{pick.market}</span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{pick.sector}</span>
+          </div>
+          <span className="text-xs px-2 py-0.5 rounded font-semibold" style={SIGNAL_STYLE[pick.signal ?? 'HOLD']}>{pick.signal}</span>
+        </div>
+        <p className="text-sm leading-relaxed" style={{ color: '#d1d5db' }}>{pick.advisory_thesis}</p>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [tab, setTab]                   = useState<'briefing' | 'portfolio'>('briefing');
+  const [tab, setTab]                   = useState<'briefing' | 'top-picks' | 'portfolio'>('briefing');
   const [portfolio, setPortfolio]       = useState<Holding[]>(DEFAULT_PORTFOLIO);
   const [history, setHistory]           = useState<HistoryEntry[]>([]);
   const [briefingData, setBriefingData]         = useState<BriefingData | null>(null);
@@ -274,6 +455,8 @@ export default function Home() {
   const [authLoading, setAuthLoading]   = useState(true);
   const [countdown, setCountdown]       = useState('');
   const [signalCount, setSignalCount]   = useState<number | null>(null);
+  const [topPicksData, setTopPicksData] = useState<TopPicksData | null>(null);
+  const [topPicksLoading, setTopPicksLoading] = useState(false);
 
   const portfolioRef = useRef<Holding[]>(DEFAULT_PORTFOLIO);
   const userRef      = useRef<User | null>(null);
@@ -388,6 +571,19 @@ export default function Home() {
       fetchPrices(holdingsForPrices);
     }
   }, [briefingData, fetchPrices]);
+
+  // ── Fetch top picks when user signs in ───────────────────────────────────
+  useEffect(() => {
+    if (!accessToken || topPicksData) return;
+    setTopPicksLoading(true);
+    fetch('/api/top-picks', { headers: { 'x-access-token': accessToken } })
+      .then(r => r.json())
+      .then((json: { picks: TopPicksData | null }) => {
+        if (json.picks) setTopPicksData(json.picks as TopPicksData);
+      })
+      .catch(() => {})
+      .finally(() => setTopPicksLoading(false));
+  }, [accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Countdown to next allowed regeneration (24h from last generated_at)
   useEffect(() => {
@@ -666,15 +862,19 @@ export default function Home() {
         {/* ── Tabs ── */}
         <div className="flex gap-1 p-1 rounded-xl mb-6"
           style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-          {(['briefing', 'portfolio'] as const).map(t => (
+          {([
+            { key: 'briefing',   label: '📊  Briefing' },
+            { key: 'top-picks',  label: '⭐  Today\'s Pick' },
+            { key: 'portfolio',  label: '💼  Portfolio' },
+          ] as const).map(({ key, label }) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="flex-1 py-2 rounded-lg text-sm font-medium transition-all"
-              style={tab === t
+              key={key}
+              onClick={() => setTab(key)}
+              className="flex-1 py-2 rounded-lg text-xs font-medium transition-all"
+              style={tab === key
                 ? { background: 'var(--accent)', color: '#fff' }
                 : { color: 'var(--text-muted)' }}>
-              {t === 'briefing' ? '📊  Briefing' : '💼  Portfolio'}
+              {label}
             </button>
           ))}
         </div>
@@ -913,6 +1113,148 @@ export default function Home() {
                   Searches for current news · generates ADD/HOLD/TRIM/EXIT signals · takes ~60s
                 </p>
               </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TODAY'S PICK TAB ── */}
+        {tab === 'top-picks' && (
+          <div className="animate-fade-in">
+
+            {/* Not signed in — blurred preview + sign-in prompt */}
+            {!user && !authLoading ? (
+              <div className="relative">
+                <div style={{ filter: 'blur(5px)', pointerEvents: 'none', userSelect: 'none' }}>
+                  {PLACEHOLDER_PICKS.map((p, i) => (
+                    <PlaceholderPickCard key={i} pick={p} />
+                  ))}
+                </div>
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6">
+                  <div className="rounded-2xl p-6 text-center w-full max-w-xs"
+                    style={{ background: 'rgba(5,10,20,0.92)', border: '1px solid var(--border)', backdropFilter: 'blur(12px)' }}>
+                    <div className="text-2xl mb-3">⭐</div>
+                    <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+                      Sign in to view Today&apos;s Pick
+                    </p>
+                    <p className="text-xs mb-4 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                      Daily AI advisory picks — one per category for ASX and NASDAQ, refreshed each morning.
+                    </p>
+                    <button onClick={signIn}
+                      className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2"
+                      style={{ background: '#f0f6fc', color: '#050a14', cursor: 'pointer' }}>
+                      <svg viewBox="-3 -3 30 30" width="14" height="14" xmlns="http://www.w3.org/2000/svg">
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                      </svg>
+                      Sign in with Google
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            ) : topPicksLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3">
+                <svg className="animate-spin w-6 h-6" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3"/>
+                  <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
+                </svg>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading today&apos;s picks…</p>
+              </div>
+
+            ) : !topPicksData ? (
+              <div className="rounded-xl p-10 text-center"
+                style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+                <div className="text-4xl mb-3">⭐</div>
+                <p className="text-sm font-semibold mb-1.5" style={{ color: 'var(--text-primary)' }}>
+                  Today&apos;s picks aren&apos;t ready yet.
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  The advisory runs each weekday morning at 7am AEST. Check back then.
+                </p>
+              </div>
+
+            ) : (
+              <>
+                {/* Header */}
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs font-semibold tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                      TODAY&apos;S PICK — ASX &amp; NASDAQ
+                    </p>
+                    <span className="text-xs px-2 py-0.5 rounded"
+                      style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }}>
+                      {new Date(topPicksData.generated_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })} AEST
+                    </span>
+                  </div>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    One AI advisory pick per category per market — refreshed daily. Not financial advice.
+                  </p>
+                </div>
+
+                {/* Market overview */}
+                {topPicksData.market_overview && (
+                  <div className="rounded-xl p-4 mb-5"
+                    style={{ background: '#0f0f23', border: '1px solid #312e81' }}>
+                    <p className="text-xs font-semibold tracking-wider mb-2" style={{ color: '#818cf8' }}>
+                      MARKET REGIME
+                    </p>
+                    <p className="text-sm leading-relaxed" style={{ color: '#e0e7ff' }}>
+                      {topPicksData.market_overview}
+                    </p>
+                  </div>
+                )}
+
+                {/* ── ASX Picks ── */}
+                {(() => {
+                  const asxPicks = topPicksData.picks.filter(p => p.market === 'ASX');
+                  return asxPicks.length > 0 ? (
+                    <div className="mb-2">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                        <span className="text-xs font-bold tracking-widest px-2 py-0.5 rounded"
+                          style={{ background: '#052e16', color: '#4ade80', border: '1px solid #166534' }}>
+                          ASX
+                        </span>
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                      </div>
+                      {asxPicks.map(pick => (
+                        <TopPicksCard key={`${pick.market}-${pick.ticker}`} pick={pick} />
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* ── NASDAQ Picks ── */}
+                {(() => {
+                  const nasdaqPicks = topPicksData.picks.filter(p => p.market === 'NASDAQ');
+                  return nasdaqPicks.length > 0 ? (
+                    <div className="mb-2">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                        <span className="text-xs font-bold tracking-widest px-2 py-0.5 rounded"
+                          style={{ background: '#0c1a2e', color: '#60a5fa', border: '1px solid #1e3a5f' }}>
+                          NASDAQ
+                        </span>
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                      </div>
+                      {nasdaqPicks.map(pick => (
+                        <TopPicksCard key={`${pick.market}-${pick.ticker}`} pick={pick} />
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* Disclaimer */}
+                <div className="rounded-xl px-4 py-3 mt-2 flex items-start gap-2"
+                  style={{ background: '#0f172a', border: '1px solid #1e3a5f' }}>
+                  <span className="text-xs mt-0.5 flex-shrink-0" style={{ color: '#60a5fa' }}>ℹ</span>
+                  <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                    <strong style={{ color: '#cbd5e1' }}>AI Perspective only.</strong> These picks are generated by an AI advisory and are for informational purposes only. They do not constitute financial advice. Always consult a qualified financial adviser before investing.
+                  </p>
+                </div>
+              </>
             )}
           </div>
         )}
