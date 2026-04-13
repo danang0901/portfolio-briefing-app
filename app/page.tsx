@@ -1810,7 +1810,7 @@ export default function Home() {
                 <div className="mb-4">
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-xs font-semibold tracking-wider" style={{ color: 'var(--text-muted)' }}>
-                      DAILY ADVISORY — TOP 5 PICKS
+                      TODAY&apos;S PICK — ASX &amp; NASDAQ
                     </p>
                     <span className="text-xs px-2 py-0.5 rounded"
                       style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }}>
@@ -1818,13 +1818,13 @@ export default function Home() {
                     </span>
                   </div>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    One high-conviction pick per category — refreshed daily. Not financial advice.
+                    One AI advisory pick per category per market — refreshed daily. Not financial advice.
                   </p>
                 </div>
 
                 {/* Market overview */}
                 {topPicksData.market_overview && (
-                  <div className="rounded-xl p-4 mb-4"
+                  <div className="rounded-xl p-4 mb-5"
                     style={{ background: '#0f0f23', border: '1px solid #312e81' }}>
                     <p className="text-xs font-semibold tracking-wider mb-2" style={{ color: '#818cf8' }}>
                       MARKET REGIME
@@ -1835,10 +1835,45 @@ export default function Home() {
                   </div>
                 )}
 
-                {/* Pick cards */}
-                {topPicksData.picks.map(pick => (
-                  <TopPicksCard key={pick.ticker} pick={pick} />
-                ))}
+                {/* ── ASX Picks ── */}
+                {(() => {
+                  const asxPicks = topPicksData.picks.filter(p => p.market === 'ASX');
+                  return asxPicks.length > 0 ? (
+                    <div className="mb-2">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                        <span className="text-xs font-bold tracking-widest px-2 py-0.5 rounded"
+                          style={{ background: '#052e16', color: '#4ade80', border: '1px solid #166534' }}>
+                          ASX
+                        </span>
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                      </div>
+                      {asxPicks.map(pick => (
+                        <TopPicksCard key={`asx-${pick.ticker}`} pick={pick} />
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* ── NASDAQ Picks ── */}
+                {(() => {
+                  const nasdaqPicks = topPicksData.picks.filter(p => p.market === 'NASDAQ');
+                  return nasdaqPicks.length > 0 ? (
+                    <div className="mb-2">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                        <span className="text-xs font-bold tracking-widest px-2 py-0.5 rounded"
+                          style={{ background: '#0c1a2e', color: '#60a5fa', border: '1px solid #1e3a5f' }}>
+                          NASDAQ
+                        </span>
+                        <div className="h-px flex-1" style={{ background: 'var(--border)' }} />
+                      </div>
+                      {nasdaqPicks.map(pick => (
+                        <TopPicksCard key={`nasdaq-${pick.ticker}`} pick={pick} />
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
 
                 {/* Disclaimer */}
                 <div className="rounded-xl px-4 py-3 mt-2 flex items-start gap-2"
